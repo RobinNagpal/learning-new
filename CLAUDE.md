@@ -319,9 +319,15 @@ the folder next to `index.js`, the same as the Prisma engine, and fails the buil
 if it did not land.
 
 **Generation is the only expensive call, and registration is open.** Every path that
-reaches the model is inside a per-user budget (`assertWithinBudget` in `topics.ts`).
-Adding a new generating endpoint means adding it there too, or the deployment's model
-bill has no ceiling. Note what it counts: rebuilding a map or one group creates no
+reaches the model is inside a per-user ceiling (`assertWithinBudget` in `topics.ts`),
+and **every ceiling is off unless the deployment names it** — `LimitsSchema` in
+`env.ts`, one repository variable per ceiling, where unset is no ceiling and costs no
+query. They are off because a map is built inside the request and CloudFront gives up on
+the origin at 60s while the server finishes anyway: two retries after a timeout spent
+the hour's nodes on maps nobody saw, and the ceiling then refused the one person it was
+not protecting anything from. Who else can register is a deployment's decision rather
+than a constant. Adding a new generating endpoint still means wiring it into one of
+them, or it is an endpoint no deployment can put a ceiling on. Note what each counts: rebuilding a map or one group creates no
 topic, so a topic count alone would leave every rebuild outside the budget entirely —
 nodes generated in the last hour is the limit that actually binds. The seven choices
 need a third counter for the same reason in reverse: they are generated *before* any
@@ -374,6 +380,16 @@ with four options each, the learner picks, and the picks go into `mapPrompt`.
   right. *recap* then asks how much of what goes still gets a mention. They replaced
   questions about code and about numbers, which asked how content is written when the
   content settings already decide that.
+- **Nothing between the form and the map is component state.** The three answers, the
+  shape, the lines, the questions, the picks and the topic a failed build left behind are
+  one draft (`apps/mobile/lib/mapDraft.ts`), written to disk. Building is half a minute
+  of model call that CloudFront abandons at 60s and that the model can fail outright, and
+  every one of those used to land on a sheet whose state went with it — so the way out
+  was answering seven questions again for a map already asked for. The draft is what the
+  review screen (`app/topic/new/review.tsx`) is made of: every answer on one page, each
+  changed in place, the build button under them, and a failure landing there with
+  everything still in it. A retry after a failure rebuilds the topic that build left
+  behind (`topicSlug` on `ApiError`) rather than creating a second one.
 - **A full rebuild asks them again**; a group rebuild does not. The questions are about
   the shape of the whole map, and a group rebuild leaves the rest of it alone. The one
   exception is the retry after a failed build, which falls back to the plan already

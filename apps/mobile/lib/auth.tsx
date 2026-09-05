@@ -5,6 +5,7 @@ import { createApiClient } from "@interestled/api";
 import type { ApiClient } from "@interestled/api";
 import type { LoginInputT, RegisterInputT, UserT } from "@interestled/schemas";
 import { API_URL } from "./config";
+import { clearMapDraft } from "./mapDraft";
 import { queryPersister } from "./queryPersister";
 import { readToken, readUser, writeToken, writeUser } from "./storage";
 
@@ -38,6 +39,9 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactElemen
     // write that would otherwise carry the empty cache there a second later.
     queryClient.clear();
     void queryPersister.removeClient();
+    // The map somebody was part way through setting up is what they typed, and
+    // it outlives a session by design — so the session ending is what ends it.
+    clearMapDraft();
   }, [queryClient]);
 
   const client = useMemo(

@@ -162,11 +162,13 @@ at the web app.
 
 ## Before this is public
 
-Registration is open and each topic costs a model call. The server caps
-generations per user (10/hour, 100 topics), but nothing yet limits how many
-accounts one person can create, so put a rate limit or a sign-up gate in front
-of `/api/auth/register` before exposing this to the internet — otherwise the
-model bill has no ceiling.
+Registration is open and each topic costs a model call. The server can cap
+generations per user, and **ships with every cap off** — each is a repository
+variable (`MAX_TOPICS_PER_HOUR`, `MAX_GENERATED_NODES_PER_HOUR` and the rest;
+knowledge doc 5 lists them), unset meaning no ceiling. Set them before exposing
+this to the internet, and put a rate limit or a sign-up gate in front of
+`/api/auth/register` as well: nothing limits how many accounts one person can
+create, so a per-user ceiling alone is not a ceiling on the bill.
 
 ## The credential Terraform runs as
 
@@ -265,9 +267,10 @@ bucket and nothing else in the account. They are separate secrets because
 `configure-aws-credentials` claims the unprefixed names for the web sync.
 
 Reading a card out is the most expensive thing the product does: a model call to
-write the script, then minutes of synthesised speech billed by the second. It is
-capped per learner per hour, and a recording is made once and played from the
-bucket after that — but it is the number to watch on the bill.
+write the script, then minutes of synthesised speech billed by the second. A
+recording is made once and played from the bucket after that, and
+`MAX_NARRATIONS_PER_HOUR` caps it per learner per hour if it is set — but it is
+the number to watch on the bill.
 
 `DATABASE_URL` is a secret because the workflow runs `prisma migrate deploy`
 with it before shipping new code, so a deploy that adds a migration applies it.

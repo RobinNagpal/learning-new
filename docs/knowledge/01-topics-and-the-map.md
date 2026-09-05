@@ -13,7 +13,9 @@ edit.
    how deep).
 2. Presses a button that asks the model for **seven questions**, each with four
    options, and picks from them. Every question is skippable.
-3. Gets the map, and lands on the topic screen with the whole tree on it.
+3. Lands on the **review screen**, which holds all of that on one page with the
+   build button under it — see below.
+4. Gets the map, and lands on the topic screen with the whole tree on it.
 
 After that the map can be corrected in place: rebuild one heading, move a node,
 delete a node, or rebuild the whole thing.
@@ -24,6 +26,11 @@ delete a node, or rebuild the whole thing.
 `POST /api/topics/:slug/questions` (a rebuild) generate them. The reply is stored
 in `map_plans` and the row's id travels back with the answers, because an answer
 is "the second option" and that means nothing beside a different four options.
+
+The stepper (`apps/mobile/components/MapQuestions.tsx`) asks one question per
+screen. It ends in a what-you-picked step on a rebuild, where there is nowhere
+else to show one, and hands straight on to the review screen when a topic is
+being created (`summarise`).
 
 `MapQuestionKind` fixes seven slots in one order — `outline`, `breakdown`,
 `known`, `recap`, `scope`, `examples`, `opening` — and `MapQuestionSet` refuses
@@ -38,7 +45,37 @@ meaningful against each other.
 Files: `packages/schemas/src/mapQuestions.ts`,
 `apps/server/src/topics.ts` (`createPlan`, `resolveChoices`, `rebuildChoices`),
 `apps/server/src/llm/prompts/map-questions.md`,
-`apps/mobile/components/MapQuestions.tsx`.
+`apps/mobile/components/MapQuestions.tsx`,
+`apps/mobile/components/MapQuestionOption.tsx` (one option, and the toggling,
+shared by the stepper and the review screen).
+
+## The draft, and the review screen
+
+Everything between "I want to learn this" and the map lives in one draft
+(`apps/mobile/lib/mapDraft.ts`): the three answers, the shape, the instruction
+lines, the questions as they were asked, the picks, and — once a build has failed
+— the topic it left behind. No screen in the flow holds any of it in component
+state.
+
+That is because building is the slow, expensive, occasionally failing part of the
+product. It is a model call of half a minute; CloudFront gives up on the origin
+at sixty seconds while the server carries on; the model can fail outright. Every
+one of those used to land on a sheet whose state went with it, so the way out was
+to answer seven questions again for a map that had already been asked for. The
+draft is written to disk (throttled), so it survives that, a phone put down, and
+the launch after it. It is cleared when a map is built, and on sign-out — it is
+what somebody typed, and the next person on the device must not be handed it.
+
+The review screen (`app/topic/new/review.tsx`) is what that makes possible: every
+answer on one page, each changed in place, and the build button under them. It is
+also where a failure lands, with everything still in it and one button to press
+again.
+
+**A failed build is retried as a rebuild, not as a second topic.** The topic row
+is written before the map is generated, so a build that failed already made one —
+which is why the 502 names it (`topicSlug` on `ApiError`) and the draft keeps it.
+The next press goes to `POST /:slug/regenerate`, which also reuses the plan
+already linked to that topic. Without it, three attempts leave three topics.
 
 ## The data model
 

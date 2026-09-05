@@ -6,6 +6,12 @@ const TOKEN_KEY = "interestled.token";
 const USER_KEY = "interestled.user";
 /** Where the query cache sleeps between launches. */
 export const QUERY_CACHE_KEY = "interestled.queries";
+/**
+ * The map being set up but not yet built. Kept on disk so a build that fails —
+ * or a phone put down between the form and the button — does not cost the
+ * learner the seven answers they gave. Read and written in lib/mapDraft.ts.
+ */
+export const MAP_DRAFT_KEY = "interestled.mapDraft";
 
 export async function readToken(): Promise<string | null> {
   return AsyncStorage.getItem(TOKEN_KEY);

@@ -1,8 +1,9 @@
 # Accounts, ownership and budgets
 
 Registration is open, every account sees only its own rows, and the only thing
-standing between an anonymous visitor and an unbounded model bill is the set of
-ceilings at the bottom of this document.
+that can stand between an anonymous visitor and an unbounded model bill is the
+set of ceilings at the bottom of this document — every one of which is off until
+a deployment sets it.
 
 ## There are no roles
 
@@ -81,21 +82,40 @@ is a different answer and is left to the handler in `app.ts`.
 ## The budgets
 
 **Generation is the only expensive call, and registration is open.** Every path
-that reaches a model is inside a per-user hourly ceiling. Adding a new generating
-endpoint means adding it to one of these, or the deployment's model bill has no
-ceiling.
+that reaches a model is inside a per-user hourly ceiling — and **every ceiling is
+off unless the deployment sets it**, which is how this ships. Adding a new
+generating endpoint still means adding it to one of these: a deployment other
+people can register on wants them set, and a ceiling nothing is wired into cannot
+be turned on later without finding the endpoint again.
 
-| Ceiling | Counts | Guards |
+Each one is a repository variable of the same name, read by `LimitsSchema` in
+`apps/server/src/env.ts` and written into `/etc/interestled-api.env` by the deploy
+workflow. Unset is no ceiling; a number is the ceiling; `0` refuses everything.
+A value that is not a whole number fails the parse rather than reading as off —
+a ceiling somebody mistyped must not be one that silently is not there.
+
+| Variable | Counts | Guards |
 |---|---|---|
-| `MAX_TOPICS_PER_HOUR` 10 | `topics` created in the last hour | Creating a topic |
-| `MAX_TOPICS_PER_USER` 100 | `topics` in total | Creating a topic |
-| `MAX_GENERATED_NODES_PER_HOUR` 400 | `learning_nodes` created in the last hour | Every map build **and every rebuild** |
-| `MAX_MAP_PLANS_PER_HOUR` 30 | `map_plans` rows in the last hour | The seven questions only |
-| `MAX_CARDS_WRITTEN_PER_HOUR` 60 | `concept_cards` written in the last hour | `?rewrite=1` |
-| `MAX_QUESTIONS_PER_HOUR` 60 | `card_questions` rows in the last hour | A question asked on a card |
-| `MAX_NARRATIONS_PER_HOUR` 20 | `card_narrations.attempts` summed over rows claimed in the last hour | Reading a card aloud |
+| `MAX_TOPICS_PER_HOUR` | `topics` created in the last hour | Creating a topic |
+| `MAX_TOPICS_PER_USER` | `topics` in total | Creating a topic |
+| `MAX_GENERATED_NODES_PER_HOUR` | `learning_nodes` created in the last hour | Every map build **and every rebuild** |
+| `MAX_MAP_PLANS_PER_HOUR` | `map_plans` rows in the last hour | The seven questions only |
+| `MAX_CARDS_WRITTEN_PER_HOUR` | `concept_cards` written in the last hour | `?rewrite=1` |
+| `MAX_QUESTIONS_PER_HOUR` | `card_questions` rows in the last hour | A question asked on a card |
+| `MAX_NARRATIONS_PER_HOUR` | `card_narrations.attempts` summed over rows claimed in the last hour | Reading a card aloud |
 
-Three things about *what* each one counts are load-bearing:
+**Why off by default.** A map is built inside the request, and CloudFront gives
+up on the origin at 60 seconds while the server carries on and finishes it. Two
+or three retries after a timeout had therefore spent the hour's nodes on maps the
+learner never saw, and the next press was refused — the ceiling was hit by the
+one person it was not protecting anything from. A ceiling is a decision about who
+else can register, so it is a deployment's to make rather than a constant.
+
+An unset ceiling also costs no query: `assertUnder` in `topics.ts` skips the
+count when there is nothing to compare it against, so a generating request makes
+no budget query at all.
+
+Four things about *what* each one counts are load-bearing:
 
 - **Nodes, not topics.** Rebuilding a map or one group creates no topic, so a
   topic count would leave every rebuild outside the budget entirely.
@@ -121,7 +141,8 @@ decision, so a press that would have cost nothing is never the one refused.
 ## What must not break
 
 - **Every query is scoped to the signed-in user.**
-- **Every generating endpoint is inside a budget.**
+- **Every generating endpoint is wired into a ceiling**, whether or not this
+  deployment sets one.
 - **`passwordHash` never leaves the server.**
 
 See CLAUDE.md, *Accounts and sessions* and *Generation is the only expensive

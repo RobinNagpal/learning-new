@@ -36,6 +36,7 @@ import { ancestorsOf, isBranch, subtreeShapeOf } from "@interestled/domain";
 import { z } from "zod";
 import type { AuthEnv } from "./auth";
 import type { Db } from "./db";
+import { getLimits } from "./env";
 import { ConflictError, NotFoundError } from "./errors";
 import {
   effectiveMapInstructions,
@@ -70,89 +71,72 @@ async function saveMap(db: Db, topic: TopicT, map: GeneratedMapT): Promise<void>
 }
 
 /**
- * Generating a map is the only expensive call in the product, and registration
- * is open, so without a ceiling anyone could burn the deployment's model budget
- * by looping topic creation. These are per user; the edge still needs a limit
- * on registration itself before this is exposed publicly (see deployment/README).
+ * The hour a ceiling counts over. Every one of them is "in the last hour", so
+ * the window is written once.
  */
-const MAX_TOPICS_PER_HOUR = 10;
-const MAX_TOPICS_PER_USER = 100;
+function hourAgo(): Date {
+  return new Date(Date.now() - 60 * 60 * 1000);
+}
+
 /**
- * Regenerating does not create a topic, so counting topics would have left every
- * rebuild — of a whole map, or of one group, as often as you like — outside the
- * budget entirely. Nodes are what a generation actually produces, so they are
- * what gets counted, and a big map costs more of the allowance than a small one.
- */
-const MAX_GENERATED_NODES_PER_HOUR = 400;
-/**
- * The seven questions are a model call that happens BEFORE a topic or a node
- * exists, so neither of the counters above can see it: a client that asked for
- * questions and never built the map would sit outside the budget entirely. One
- * plan row is written per questions call, which makes the rows the counter.
+ * One ceiling, checked only if the deployment set it.
  *
- * Higher than the topic limit because asking, reading the four samples and
- * changing your mind is a thing people do, and each of those is a plan with no
- * topic behind it.
+ * The counts are lazy for the same reason: an unset ceiling is one nothing can
+ * be refused for, so counting the rows it would have compared against is a
+ * query paid on every card, question and press for an answer nobody reads.
+ * With none of them set — which is the default, see LimitsSchema — a generating
+ * request makes no budget query at all.
  */
-const MAX_MAP_PLANS_PER_HOUR = 30;
+async function assertUnder(
+  limit: number | undefined,
+  count: () => Promise<number>,
+  refusal: (limit: number) => string,
+): Promise<void> {
+  if (limit === undefined) {
+    return;
+  }
+  if ((await count()) >= limit) {
+    throw new ConflictError(refusal(limit));
+  }
+}
 
 /**
- * Cards written in an hour, of which a rewrite is the only kind a learner can
- * ask for without limit — opening a node writes its card once and is answered
- * from the cache after that. High enough that an hour of ordinary reading never
- * approaches it, since what it is protecting against is a button pressed in a
- * loop rather than a long session.
- */
-const MAX_CARDS_WRITTEN_PER_HOUR = 60;
-
-/**
- * The hour's card writing, against that ceiling — every card, however it came
- * to be written, because the model spend is the same either way and a rewrite
+ * The hour's card writing, against its ceiling — every card, however it came to
+ * be written, because the model spend is the same either way and a rewrite
  * measured against its own share of it would ignore the reading that used the
  * rest. Only rewrites are checked: reading is bounded by how many nodes there
  * are, so refusing it would only ever mean refusing to show the next node.
  */
 export async function assertRewriteBudget(db: Db, userId: string): Promise<void> {
-  const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
-  const recent = await db.conceptCard.count({
-    where: { node: { topic: { userId } }, createdAt: { gte: hourAgo } },
-  });
-  if (recent >= MAX_CARDS_WRITTEN_PER_HOUR) {
-    throw new ConflictError(
-      "That is a lot of card writing in one hour — the limit resets shortly.",
-    );
-  }
+  await assertUnder(
+    getLimits().MAX_CARDS_WRITTEN_PER_HOUR,
+    () =>
+      db.conceptCard.count({
+        where: { node: { topic: { userId } }, createdAt: { gte: hourAgo() } },
+      }),
+    () => "That is a lot of card writing in one hour — the limit resets shortly.",
+  );
 }
 
-/**
- * Recordings a learner may have made in an hour.
- *
- * The tightest of these ceilings, because it is the most expensive press in the
- * product: a model call to write the script and then minutes of synthesised
- * speech, billed by the second of audio rather than by the token of text. Low
- * enough that a press held down cannot run up a bill, high enough that an hour
- * of listening through a topic never reaches it — a card is recorded once and
- * answered from the bucket after that, so this only binds on new ones.
- */
-const MAX_NARRATIONS_PER_HOUR = 20;
-
+/** Recordings a learner may have made in an hour, when that is capped at all. */
 export async function assertNarrationBudget(db: Db, userId: string): Promise<void> {
-  const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
-  // Runs started, not rows. There is one row per card, and a card that fails
-  // every time is taken over again on each press — counting rows, a learner
-  // holding down retry on a broken card would never reach the ceiling while
-  // spending two model calls a press. `attempts` on a row claimed inside the
-  // hour may include presses from before it, which over-counts slightly and in
-  // the safe direction.
-  const recent = await db.cardNarration.aggregate({
-    where: { card: { node: { topic: { userId } } }, createdAt: { gte: hourAgo } },
-    _sum: { attempts: true },
-  });
-  if ((recent._sum.attempts ?? 0) >= MAX_NARRATIONS_PER_HOUR) {
-    throw new ConflictError(
-      "That is a lot of cards read out in one hour — the limit resets shortly.",
-    );
-  }
+  await assertUnder(
+    getLimits().MAX_NARRATIONS_PER_HOUR,
+    // Runs started, not rows. There is one row per card, and a card that fails
+    // every time is taken over again on each press — counting rows, a learner
+    // holding down retry on a broken card would never reach the ceiling while
+    // spending two model calls a press. `attempts` on a row claimed inside the
+    // hour may include presses from before it, which over-counts slightly and in
+    // the safe direction.
+    async () => {
+      const recent = await db.cardNarration.aggregate({
+        where: { card: { node: { topic: { userId } } }, createdAt: { gte: hourAgo() } },
+        _sum: { attempts: true },
+      });
+      return recent._sum.attempts ?? 0;
+    },
+    () => "That is a lot of cards read out in one hour — the limit resets shortly.",
+  );
 }
 
 /**
@@ -161,16 +145,13 @@ export async function assertNarrationBudget(db: Db, userId: string): Promise<voi
  * nothing else bounds it — a card is written once per settings and a drill once
  * per node, but a question can be asked as many times as there is a button.
  */
-const MAX_QUESTIONS_PER_HOUR = 60;
-
 export async function assertQuestionBudget(db: Db, userId: string): Promise<void> {
-  const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
-  const recent = await db.cardQuestion.count({
-    where: { node: { topic: { userId } }, createdAt: { gte: hourAgo } },
-  });
-  if (recent >= MAX_QUESTIONS_PER_HOUR) {
-    throw new ConflictError("That is a lot of questions in one hour — the limit resets shortly.");
-  }
+  await assertUnder(
+    getLimits().MAX_QUESTIONS_PER_HOUR,
+    () =>
+      db.cardQuestion.count({ where: { node: { topic: { userId } }, createdAt: { gte: hourAgo() } } }),
+    () => "That is a lot of questions in one hour — the limit resets shortly.",
+  );
 }
 
 /**
@@ -189,27 +170,43 @@ interface BudgetFor {
   newPlan: boolean;
 }
 
+/**
+ * The map ceilings, in the order it is worth being told about them, and each
+ * one skipped when the deployment has not set it.
+ *
+ * One after another rather than in parallel: with nothing set this makes no
+ * query at all, and with something set the first refusal is the answer, so the
+ * counts after it would be spent working out how much else was also over.
+ *
+ * Nodes rather than topics is the load-bearing one. A rebuild — of a whole map,
+ * or of one group, as often as you like — creates no topic, so a topic count
+ * would leave every rebuild outside the budget entirely.
+ */
 async function assertWithinBudget(db: Db, userId: string, about: BudgetFor): Promise<void> {
-  const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
-  const [recentTopics, totalTopics, recentNodes, recentPlans] = await Promise.all([
-    about.newTopic ? db.topic.count({ where: { userId, createdAt: { gte: hourAgo } } }) : Promise.resolve(0),
-    about.newTopic ? db.topic.count({ where: { userId } }) : Promise.resolve(0),
-    db.learningNode.count({ where: { topic: { userId }, createdAt: { gte: hourAgo } } }),
-    about.newPlan ? db.mapPlan.count({ where: { userId, createdAt: { gte: hourAgo } } }) : Promise.resolve(0),
-  ]);
-  if (about.newTopic && recentTopics >= MAX_TOPICS_PER_HOUR) {
-    throw new ConflictError(
-      `That is ${MAX_TOPICS_PER_HOUR} new topics in an hour — the limit resets shortly.`,
+  const limits = getLimits();
+  if (about.newTopic) {
+    await assertUnder(
+      limits.MAX_TOPICS_PER_HOUR,
+      () => db.topic.count({ where: { userId, createdAt: { gte: hourAgo() } } }),
+      (limit) => `That is ${limit} new topics in an hour — the limit resets shortly.`,
+    );
+    await assertUnder(
+      limits.MAX_TOPICS_PER_USER,
+      () => db.topic.count({ where: { userId } }),
+      (limit) => `You have reached ${limit} topics. Delete one to add another.`,
     );
   }
-  if (about.newTopic && totalTopics >= MAX_TOPICS_PER_USER) {
-    throw new ConflictError(`You have reached ${MAX_TOPICS_PER_USER} topics. Delete one to add another.`);
-  }
-  if (recentNodes >= MAX_GENERATED_NODES_PER_HOUR) {
-    throw new ConflictError("That is a lot of map building in one hour — the limit resets shortly.");
-  }
-  if (about.newPlan && recentPlans >= MAX_MAP_PLANS_PER_HOUR) {
-    throw new ConflictError("That is a lot of maps started in one hour — the limit resets shortly.");
+  await assertUnder(
+    limits.MAX_GENERATED_NODES_PER_HOUR,
+    () => db.learningNode.count({ where: { topic: { userId }, createdAt: { gte: hourAgo() } } }),
+    () => "That is a lot of map building in one hour — the limit resets shortly.",
+  );
+  if (about.newPlan) {
+    await assertUnder(
+      limits.MAX_MAP_PLANS_PER_HOUR,
+      () => db.mapPlan.count({ where: { userId, createdAt: { gte: hourAgo() } } }),
+      () => "That is a lot of maps started in one hour — the limit resets shortly.",
+    );
   }
 }
 

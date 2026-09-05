@@ -59,12 +59,22 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /**
+     * The topic a failed build left behind, when the failure was one.
+     *
+     * Creating a topic writes the row before it generates the map, so a build
+     * that fails has already made one — and a client that only knew the message
+     * would answer "try again" by creating a second topic, and a third. With
+     * the slug it rebuilds the one that is there, which is also the row the
+     * seven answers are linked to.
+     */
+    readonly topicSlug?: string,
   ) {
     super(message);
   }
 }
 
-const ErrorBody = z.object({ error: z.string() });
+const ErrorBody = z.object({ error: z.string(), topicSlug: z.string().optional() });
 
 /** Sends the request and throws on anything that is not a 2xx. */
 async function send(
@@ -91,6 +101,7 @@ async function send(
     throw new ApiError(
       response.status,
       parsed.success ? parsed.data.error : `Request failed (${response.status})`,
+      parsed.success ? parsed.data.topicSlug : undefined,
     );
   }
   return response;

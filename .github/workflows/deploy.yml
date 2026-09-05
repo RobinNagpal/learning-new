@@ -16,7 +16,14 @@
 #            GEMINI_API_KEY                             (the model provider's key)
 #   vars:    S3_BUCKET, CLOUDFRONT_DISTRIBUTION_ID, DEPLOY_HOST, SSH_HOST_KEY,
 #            SITE_URL, LLM_PROVIDER, LLM_MODEL, LLM_CONTENT_MODEL, LLM_AUDIO_MODEL,
-#            AUDIO_BUCKET
+#            AUDIO_BUCKET,
+#            MAX_TOPICS_PER_HOUR, MAX_TOPICS_PER_USER, MAX_GENERATED_NODES_PER_HOUR,
+#            MAX_MAP_PLANS_PER_HOUR, MAX_CARDS_WRITTEN_PER_HOUR, MAX_QUESTIONS_PER_HOUR,
+#            MAX_NARRATIONS_PER_HOUR
+#
+# Every MAX_ variable is a generation ceiling per user per hour, and every one is
+# off unless it is set. Set them on a deployment other people can register on —
+# registration is open, and generation is what costs money.
 #
 # The audio half is optional: with AUDIO_BUCKET and the API_AWS_* secrets unset,
 # every route still serves and the only thing that fails is the play button on a
@@ -151,6 +158,16 @@ jobs:
           LLM_CONTENT_MODEL: ${{ vars.LLM_CONTENT_MODEL }}
           LLM_AUDIO_MODEL: ${{ vars.LLM_AUDIO_MODEL }}
           AUDIO_BUCKET: ${{ vars.AUDIO_BUCKET }}
+          # Unset means no ceiling, which is what a single-learner deployment
+          # wants: a build cut off at CloudFront's 60s still spends the hour's
+          # nodes, so a ceiling turns a slow map into a refused retry.
+          MAX_TOPICS_PER_HOUR: ${{ vars.MAX_TOPICS_PER_HOUR }}
+          MAX_TOPICS_PER_USER: ${{ vars.MAX_TOPICS_PER_USER }}
+          MAX_GENERATED_NODES_PER_HOUR: ${{ vars.MAX_GENERATED_NODES_PER_HOUR }}
+          MAX_MAP_PLANS_PER_HOUR: ${{ vars.MAX_MAP_PLANS_PER_HOUR }}
+          MAX_CARDS_WRITTEN_PER_HOUR: ${{ vars.MAX_CARDS_WRITTEN_PER_HOUR }}
+          MAX_QUESTIONS_PER_HOUR: ${{ vars.MAX_QUESTIONS_PER_HOUR }}
+          MAX_NARRATIONS_PER_HOUR: ${{ vars.MAX_NARRATIONS_PER_HOUR }}
           # The API's own key, not the deployer's above: it can put and get
           # objects in the audio bucket and nothing else in the account.
           API_AWS_ACCESS_KEY_ID: ${{ secrets.API_AWS_ACCESS_KEY_ID }}
@@ -182,6 +199,13 @@ jobs:
             "AWS_REGION=$AWS_REGION" \
             "AWS_ACCESS_KEY_ID=$API_AWS_ACCESS_KEY_ID" \
             "AWS_SECRET_ACCESS_KEY=$API_AWS_SECRET_ACCESS_KEY" \
+            "MAX_TOPICS_PER_HOUR=$MAX_TOPICS_PER_HOUR" \
+            "MAX_TOPICS_PER_USER=$MAX_TOPICS_PER_USER" \
+            "MAX_GENERATED_NODES_PER_HOUR=$MAX_GENERATED_NODES_PER_HOUR" \
+            "MAX_MAP_PLANS_PER_HOUR=$MAX_MAP_PLANS_PER_HOUR" \
+            "MAX_CARDS_WRITTEN_PER_HOUR=$MAX_CARDS_WRITTEN_PER_HOUR" \
+            "MAX_QUESTIONS_PER_HOUR=$MAX_QUESTIONS_PER_HOUR" \
+            "MAX_NARRATIONS_PER_HOUR=$MAX_NARRATIONS_PER_HOUR" \
             | ssh "${ssh_opts[@]}" "deploy@$DEPLOY_HOST" "umask 077 && cat > /etc/$APP-api.env"
 
           ssh "${ssh_opts[@]}" "deploy@$DEPLOY_HOST" "

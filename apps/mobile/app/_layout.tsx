@@ -72,9 +72,19 @@ export default function RootLayout(): ReactElement {
                 name="profile"
                 options={{ title: "Your profile", headerLeft: backHeader("/") }}
               />
+              {/* Adding a topic is two screens: what you want, and everything
+                  the map is about to be built from with the button under it. */}
               <Stack.Screen
-                name="topic/new"
+                name="topic/new/index"
                 options={{ title: "New topic", presentation: "modal", headerLeft: backHeader("/") }}
+              />
+              <Stack.Screen
+                name="topic/new/review"
+                options={{
+                  title: "Check it over",
+                  presentation: "modal",
+                  headerLeft: backHeader("/topic/new"),
+                }}
               />
               {/* Titles for these come from the topic they load. */}
               <Stack.Screen name="topic/[topic]/index" options={{ title: "Map" }} />

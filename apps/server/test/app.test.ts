@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CardAngle,
   ContentFormat,
@@ -30,6 +30,16 @@ import { GenerationError } from "../src/errors";
 import type { SpeechProvider } from "../src/llm/speech";
 import type { ObjectStore } from "../src/storage";
 import type { LlmProvider } from "../src/llm/types";
+
+/**
+ * Every generation ceiling is off unless the deployment names it, so a test
+ * that wants to prove one still refuses sets it here and this puts it back.
+ * Without the unstub the variable would leak into whatever ran next, and the
+ * test it broke would be one that never mentions limits.
+ */
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 /**
  * The auth boundary depends on registration order in app.ts: the public
@@ -866,9 +876,10 @@ describe("card generation", () => {
   });
 
   it("refuses a rewrite once the hour's card writing has hit its ceiling", async () => {
-    // Every other generating call either creates nodes or is answered from the
-    // cache the second time. This one costs a model call per press, so without
-    // a ceiling the deployment's bill has none.
+    // This one costs a model call per press, and every other generating call
+    // either creates nodes or is answered from the cache the second time — so
+    // it is the press a deployment that wants a ceiling puts one on.
+    vi.stubEnv("MAX_CARDS_WRITTEN_PER_HOUR", "60");
     const { db } = cardDb(mapRows(), "n2");
     const stub = db as unknown as { conceptCard: { count: ReturnType<typeof vi.fn> } };
     stub.conceptCard.count = vi.fn(async () => 60);
@@ -885,6 +896,7 @@ describe("card generation", () => {
   it("lets an ordinary read through at that same count, since only a rewrite is checked", async () => {
     // Reading is bounded by how many nodes there are, so refusing it would only
     // ever mean refusing to show the next node.
+    vi.stubEnv("MAX_CARDS_WRITTEN_PER_HOUR", "60");
     const { db } = cardDb(mapRows(), "n2");
     const stub = db as unknown as { conceptCard: { count: ReturnType<typeof vi.fn> } };
     stub.conceptCard.count = vi.fn(async () => 60);
@@ -1189,6 +1201,7 @@ describe("card questions", () => {
   });
 
   it("stops the sixty-first question in an hour", async () => {
+    vi.stubEnv("MAX_QUESTIONS_PER_HOUR", "60");
     const { db } = questionDb();
     const stub = db as unknown as { cardQuestion: { count: ReturnType<typeof vi.fn> } };
     stub.cardQuestion.count = vi.fn(async () => 60);
@@ -1579,10 +1592,29 @@ describe("map plans", () => {
     expect(topics).toEqual([]);
   });
 
+  it("builds a map whatever the hour already generated, since no ceiling is set", async () => {
+    // The ceilings are off unless a deployment names one, and the node count is
+    // the one that used to bite: a build cut off by CloudFront at 60s runs to
+    // completion on the server, so two or three retries after a timeout had
+    // spent the hour and the next press was refused for a map nobody ever got.
+    const { db } = planDb([]);
+    const stub = db as unknown as { learningNode: { count: ReturnType<typeof vi.fn> } };
+    stub.learningNode.count = vi.fn(async () => 4000);
+    const { provider } = recorder(MAP);
+
+    const built = await post(db, provider, "/api/topics", { title: "Kubernetes" });
+
+    expect(built.status).toBe(201);
+    // Nothing is counted either: an unset ceiling is one nothing can be refused
+    // for, so the query it would be compared against is never made.
+    expect(stub.learningNode.count).not.toHaveBeenCalled();
+  });
+
   it("stops a thirty-first set of questions, but never a build", async () => {
     // The plan cap exists to stop someone generating questions all day. If it
     // also gated the build, a learner who had just answered seven questions
     // would be told they could not have the map they answered them for.
+    vi.stubEnv("MAX_MAP_PLANS_PER_HOUR", "30");
     const spent: PlanRow[] = Array.from({ length: 30 }, (_, index) => ({
       id: `p${index}`,
       userId: "u1",
@@ -2219,6 +2251,8 @@ describe("reading a card out", () => {
   it("counts every run against the ceiling, not every card", async () => {
     // One row per card, so a card that fails on every press would be retryable
     // without limit if the budget counted rows. Each retry is two model calls.
+    // Only checked where there is a ceiling to check against, so this names one.
+    vi.stubEnv("MAX_NARRATIONS_PER_HOUR", "20");
     const stub = audioStub({ narration: { status: NarrationStatus.Failed, error: "It broke." } });
     await post(stub);
     await stub.settle();
@@ -2314,6 +2348,7 @@ describe("reading a card out", () => {
   });
 
   it("refuses once the hour's recordings have hit the ceiling", async () => {
+    vi.stubEnv("MAX_NARRATIONS_PER_HOUR", "20");
     const stub = audioStub({ narration: null, recent: 20 });
     const response = await post(stub);
 

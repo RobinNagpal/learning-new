@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LlmTask } from "@interestled/schemas";
-import { EnvSchema, modelFor } from "../src/env";
+import { EnvSchema, LimitsSchema, modelFor } from "../src/env";
 
 /** Everything the schema requires, so a test only names what it is about. */
 function env(overrides: Record<string, string> = {}): Record<string, string> {
@@ -46,6 +46,35 @@ describe("the environment", () => {
     const parsed = EnvSchema.parse(env({ LLM_MODEL: "gemini-9-pro", PORT: "8080" }));
     expect(parsed.LLM_MODEL).toBe("gemini-9-pro");
     expect(parsed.PORT).toBe(8080);
+  });
+});
+
+describe("the generation ceilings", () => {
+  it("reads nothing set, and an empty line, as no ceiling at all", () => {
+    // Unset is the default the product ships with: a build cut off by
+    // CloudFront at 60s still spends the hour's nodes, and being refused the
+    // retry for a map that never arrived is worse than the bill it guards.
+    const parsed = LimitsSchema.parse({ MAX_TOPICS_PER_HOUR: "" });
+    expect(parsed.MAX_TOPICS_PER_HOUR).toBeUndefined();
+    expect(parsed.MAX_GENERATED_NODES_PER_HOUR).toBeUndefined();
+  });
+
+  it("keeps a ceiling that is set, zero included", () => {
+    const parsed = LimitsSchema.parse({
+      MAX_GENERATED_NODES_PER_HOUR: "400",
+      MAX_NARRATIONS_PER_HOUR: "0",
+    });
+    expect(parsed.MAX_GENERATED_NODES_PER_HOUR).toBe(400);
+    // Zero is a deployment with that generation turned off, not one with no
+    // ceiling — which is why unset is undefined rather than 0.
+    expect(parsed.MAX_NARRATIONS_PER_HOUR).toBe(0);
+  });
+
+  it("refuses a ceiling that is not a whole number rather than reading it as off", () => {
+    // A ceiling somebody meant to set and mistyped must not be a ceiling that
+    // silently is not there.
+    expect(LimitsSchema.safeParse({ MAX_TOPICS_PER_HOUR: "ten" }).success).toBe(false);
+    expect(LimitsSchema.safeParse({ MAX_TOPICS_PER_HOUR: "-1" }).success).toBe(false);
   });
 });
 
