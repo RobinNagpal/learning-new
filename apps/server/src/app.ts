@@ -5,6 +5,7 @@ import type { TextTask } from "@interestled/schemas";
 import { authRouter, requireAuth, sessionRouter } from "./auth";
 import type { AuthEnv } from "./auth";
 import type { Db } from "./db";
+import { getLimits } from "./env";
 import { ConflictError, GenerationError, NotFoundError, UniqueViolation } from "./errors";
 import { learningRouter } from "./learning";
 import type { Background } from "./narration";
@@ -105,6 +106,13 @@ export function createApp(db: Db, options: AppOptions = {}): Hono {
       // net under that, for the case where even that write fails.
       void task.catch((error: unknown) => console.error("background task failed", error));
     });
+
+  // Read once here as well as per request. A ceiling is only looked at when
+  // something generates, so a mistyped number would otherwise sit unnoticed
+  // through boot, the deploy's health check and every login, and surface as a
+  // 500 on the first card somebody wrote. Failing at construction makes it the
+  // deploy's problem instead, with Zod naming the variable.
+  getLimits();
 
   const origins = allowedOrigins();
   app.use(

@@ -44,15 +44,35 @@ export default function NewTopicScreen(): ReactElement {
   // they are about the map, not about the learner, and they only matter at the
   // moment the button is pressed.
   const [asking, setAsking] = useState(false);
+  // Whether the choices being written are a second set, over a plan that is
+  // already answered. The sheet needs to know: without it, pressing "ask again"
+  // shows the OLD seven questions immediately, and the learner answers a set
+  // that is replaced under them the moment the call lands — along with every
+  // pick they just made. A failure has nowhere to be shown either.
+  const [rewriting, setRewriting] = useState(false);
 
   const ask = (): void => {
     setAsking(true);
+    setRewriting(draft.plan !== null);
     // Answers are indexes into the four options of the set they were asked
     // against, so a new set has to arrive with the old answers dropped.
     questions.mutate(topicCreateInput(draft), {
-      onSuccess: (plan) => setMapDraft({ plan, answers: [] }),
+      onSuccess: (plan) => {
+        setMapDraft({ plan, answers: [] });
+        setRewriting(false);
+      },
+      // The plan already there is kept, so a failed re-ask costs nothing: the
+      // sheet says what went wrong over the choices that still stand.
+      onError: () => setRewriting(false),
     });
   };
+
+  /**
+   * The choices the sheet may show: the ones there are, unless a second set is
+   * being written over them — while that is in flight there is nothing to
+   * answer, because the answers would be indexes into a set about to be gone.
+   */
+  const plan = rewriting ? null : draft.plan;
 
   /** Whether there is anything here worth offering to clear. */
   const started =
@@ -125,15 +145,15 @@ export default function NewTopicScreen(): ReactElement {
 
       <Sheet
         visible={asking}
-        title={draft.plan === null ? "Writing your choices" : "Which of these do you want?"}
+        title={plan === null ? "Writing your choices" : "Which of these do you want?"}
         body={
-          draft.plan === null
+          plan === null
             ? "Four samples per question, seven questions, and any of them can be skipped."
             : "Seven choices, and any of them can be skipped."
         }
         onClose={() => (questions.isPending ? undefined : setAsking(false))}
       >
-        {draft.plan === null ? (
+        {plan === null ? (
           <>
             {questions.isError ? <ErrorState message={messageOf(questions.error)} /> : null}
             {questions.isPending ? (
@@ -146,7 +166,7 @@ export default function NewTopicScreen(): ReactElement {
           </>
         ) : (
           <MapQuestions
-            questions={draft.plan.questions}
+            questions={plan.questions}
             answers={draft.answers}
             onAnswers={(answers) => setMapDraft({ answers })}
             finishLabel="Review it"

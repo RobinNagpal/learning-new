@@ -30,8 +30,16 @@ model User {
   // What `username` was called until it also became an address. Kept for one
   // deploy only: migrations run before the new bundle ships, so the code still
   // running when this lands selects this column and dropping it in the same
-  // change would break every query touching a user. DROP IT IN THE NEXT SCHEMA
-  // CHANGE — nothing reads it now.
+  // change would break every query touching a user. Nothing reads or writes it
+  // now — registration deliberately leaves it to its default, since it carries
+  // a unique index of its own.
+  //
+  // THE NEXT SCHEMA CHANGE DROPS IT, and repairs the deploy gap on the way:
+  //   UPDATE users SET username = slug WHERE username <> slug;
+  //   ALTER TABLE users DROP COLUMN slug;
+  // An account registered in the minutes between the migration and the new
+  // bundle has a real slug and a defaulted username, and that first line is
+  // what gives it the name it should have had.
   slug         String        @unique @default(dbgenerated("md5((random())::text)"))
   // scrypt output, "scrypt$N$r$p$salt$hash". Excluded globally via the Prisma
   // client's `omit` config so it can never reach an API response.

@@ -18,7 +18,7 @@ learner sees, what happens when they use it, and which files to open.
 | [2. Cards and writing settings](docs/knowledge/02-cards-and-writing-settings.md) | The concept card, its slots, the cache, the controls under it, questions asked on it |
 | [3. Drills, progress and review](docs/knowledge/03-drills-progress-and-review.md) | The status ladder, grading, spaced review, study sessions |
 | [4. Reading a card aloud](docs/knowledge/04-reading-a-card-aloud.md) | The play button, narration scripts, the voice a topic is read in, speech synthesis, the audio bucket |
-| [5. Accounts, ownership and budgets](docs/knowledge/05-accounts-ownership-and-budgets.md) | Registration, sessions, the authorisation model, every generation ceiling |
+| [5. Accounts, ownership and budgets](docs/knowledge/05-accounts-ownership-and-budgets.md) | Registration, sessions, usernames, what is public and what is not, every generation ceiling |
 | [6. LLM providers and prompts](docs/knowledge/06-llm-providers-and-prompts.md) | Which model answers which call, structured generation, the prompt files |
 | [7. The app shell and caching](docs/knowledge/07-the-app-shell-and-caching.md) | Routing, the query cache and what is persisted, the component set |
 

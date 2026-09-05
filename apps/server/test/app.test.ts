@@ -135,6 +135,35 @@ describe("auth boundary", () => {
     expect(response.status).toBe(201);
   });
 
+  it("names the new account and writes nothing to the column username replaced", async () => {
+    // `slug` still exists for one deploy and carries its own unique index. A
+    // row from the deploy gap holds a slug and a defaulted username, so writing
+    // both here would make every later registration of that same base collide
+    // on a constraint the retry does not recognise — and that address could
+    // then never register at all. The column has a default; leave it to it.
+    const db = stubDb(null);
+    const created = (db as unknown as { user: { create: ReturnType<typeof vi.fn> } }).user.create;
+    const response = await createApp(db, { provider }).request("/api/auth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "Robin.Nagpal@gmail.com", password: "a long enough one" }),
+    });
+
+    expect(response.status).toBe(201);
+    const data = created.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+    expect(data.data.username).toBe("robin-nagpal");
+    expect(Object.keys(data.data)).not.toContain("slug");
+  });
+
+  it("refuses to start at all when a generation ceiling is not a number", async () => {
+    // Ceilings are read where they are checked, which is only ever inside a
+    // generating call — so a mistyped one would otherwise sit through boot, the
+    // deploy's health check and every login, and surface as a 500 on the first
+    // card somebody wrote.
+    vi.stubEnv("MAX_TOPICS_PER_HOUR", "ten");
+    expect(() => createApp(stubDb(null), { provider })).toThrow();
+  });
+
   it("leaves health open, so the load balancer never needs a token", async () => {
     const response = await createApp(stubDb(null), { provider }).request("/health");
     expect(response.status).toBe(200);
@@ -2168,7 +2197,10 @@ describe("reading a card out", () => {
 
   it("answers that press even at the ceiling, since it costs nothing", async () => {
     // The budget is about what a press would spend. Refusing one that would
-    // have been served from the bucket turns a retry into a dead end.
+    // have been served from the bucket turns a retry into a dead end. The
+    // ceiling has to be named, or this passes for the wrong reason — there is
+    // none set by default, and the check it is about would never run.
+    vi.stubEnv("MAX_NARRATIONS_PER_HOUR", "20");
     const stub = audioStub({ narration: {}, recent: 20 });
     expect((await post(stub)).status).toBe(200);
   });

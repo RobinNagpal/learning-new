@@ -95,12 +95,14 @@ async function createUser(db: Db, email: string, passwordHash: string): Promise<
   for (let attempt = 0; attempt < USERNAME_ATTEMPTS; attempt += 1) {
     try {
       const username = await allocateUsername(db, email);
-      // `slug` is the column username replaced and is written here only until
-      // the next schema change drops it — see the note on User in schema.prisma.
+      // `slug` is deliberately not written, even though the column is still
+      // there: it carries its own unique index, and a row from the deploy gap
+      // holding slug "robin" with a defaulted username would then make every
+      // later attempt at "robin" collide on a constraint this loop does not
+      // recognise — leaving that address unable to register at all. Its
+      // md5(random()) default cannot collide with anything.
       return User.parse(
-        await db.user.create({
-          data: { id: newId(), email, passwordHash, username, slug: username },
-        }),
+        await db.user.create({ data: { id: newId(), email, passwordHash, username } }),
       );
     } catch (error) {
       // Anything else — a taken email above all — is answered by the handler in

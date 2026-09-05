@@ -52,14 +52,26 @@ export default function ReviewMapScreen(): ReactElement {
   // topic with the same title beside the first, and then a third.
   const rebuild = useRegenerateTopic(draft.topicSlug ?? "");
   const busy = create.isPending || rebuild.isPending;
+  // Only one of these can be set at a time, because an attempt clears both
+  // before it starts. Without that, a create that failed leaves its error on
+  // screen through every retry after it — including the ones that fail for a
+  // different reason, which the learner would then never be told.
   const error: Error | null = create.error ?? rebuild.error;
 
   const built = (slug: string): void => {
     clearMapDraft();
+    // The map replaces this screen and the form under it: they are the setting
+    // up of a topic that now exists, and leaving them in the stack means Back
+    // from the map lands on an empty New topic sheet.
+    if (router.canDismiss()) {
+      router.dismissAll();
+    }
     router.replace(topicHref(slug));
   };
 
   const build = (): void => {
+    create.reset();
+    rebuild.reset();
     if (draft.topicSlug !== null) {
       rebuild.mutate(
         {
@@ -68,7 +80,18 @@ export default function ReviewMapScreen(): ReactElement {
           planId: draft.plan?.planId,
           answers: draft.answers,
         },
-        { onSuccess: (topic) => built(topic.slug) },
+        {
+          onSuccess: (topic) => built(topic.slug),
+          onError: (failure) => {
+            // The topic this was going to rebuild is gone — deleted from the
+            // topics list, most likely, which the error state below offers as a
+            // way out. Forgetting it turns the next press back into a create,
+            // rather than a 404 no amount of pressing can clear.
+            if (failure instanceof ApiError && failure.status === 404) {
+              setMapDraft({ topicSlug: null });
+            }
+          },
+        },
       );
       return;
     }
@@ -178,7 +201,18 @@ export default function ReviewMapScreen(): ReactElement {
         </Text>
       ) : null}
       {error === null ? null : (
-        <Button label="Your topics" tone="quiet" onPress={() => router.replace("/")} />
+        <Button
+          label="Your topics"
+          tone="quiet"
+          onPress={() => {
+            // Leaving rather than stacking another copy of the list under this
+            // one: everything here is on disk, so coming back costs nothing.
+            if (router.canDismiss()) {
+              router.dismissAll();
+            }
+            router.replace("/");
+          }}
+        />
       )}
     </Screen>
   );

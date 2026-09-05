@@ -89,10 +89,12 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactElemen
 
   const adopt = useCallback(
     async (result: { token: string; user: UserT }): Promise<void> => {
-      // A sign-in starts from an empty cache. The one on disk is cleared on
-      // sign-out too, but a sign-out cut off before that write landed would
-      // otherwise hand the next person the last one's map for a moment.
+      // A sign-in starts from an empty cache and an empty draft. Both are
+      // cleared on sign-out too, but a sign-out cut off before those writes
+      // landed would otherwise hand the next person the last one's map — and,
+      // for the draft, the sentences they typed about themselves.
       queryClient.clear();
+      clearMapDraft();
       token.current = result.token;
       await writeToken(result.token);
       await remember(result.user);

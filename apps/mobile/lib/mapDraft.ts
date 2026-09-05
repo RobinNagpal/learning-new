@@ -70,7 +70,18 @@ export function topicCreateInput(draft: MapDraftT): TopicCreateInputT {
 }
 
 let draft: MapDraftT = EMPTY_DRAFT;
-/** Set once anything has been typed or read back, so a late read cannot clobber it. */
+/**
+ * Which fields have been set since launch, so the read from disk below can land
+ * under them rather than over them.
+ *
+ * A whole-draft "has anything happened yet" flag was wrong, and wrong in the one
+ * way this store exists to prevent. The create screen seeds its instruction box
+ * from the server on mount, which writes `mapInstructions` a moment after the
+ * screen opens — beat the disk read to it and the learner's stored title, goal,
+ * answers and plan were all dropped for the sake of one field nobody had typed.
+ */
+const set = new Set<keyof MapDraftT>();
+/** True once the draft on disk has been read, or deliberately thrown away. */
 let settled = false;
 const listeners = new Set<() => void>();
 
@@ -100,7 +111,9 @@ function publish(next: MapDraftT): void {
 
 /** Change part of the draft. Everything else is left as it was. */
 export function setMapDraft(patch: Partial<MapDraftT>): void {
-  settled = true;
+  for (const key of Object.keys(patch) as (keyof MapDraftT)[]) {
+    set.add(key);
+  }
   publish({ ...draft, ...patch });
   save();
 }
@@ -108,9 +121,20 @@ export function setMapDraft(patch: Partial<MapDraftT>): void {
 /** Nothing left to build: the map was made, or somebody signed out. */
 export function clearMapDraft(): void {
   settled = true;
+  // Every field is now deliberately empty, so the read from disk must not put
+  // any of them back.
+  for (const key of Object.keys(EMPTY_DRAFT) as (keyof MapDraftT)[]) {
+    set.add(key);
+  }
+  // The pending write is cancelled rather than left to fire: it holds the draft
+  // as it was a moment ago, and would put the key back seconds after this
+  // removed it — which on a sign-out is the last person's answers restored for
+  // the next one.
+  if (writing !== null) {
+    clearTimeout(writing);
+    writing = null;
+  }
   publish(EMPTY_DRAFT);
-  // Removed rather than left to the throttled write above, so a sign-out that
-  // is the last thing the app does still leaves nothing behind.
   void AsyncStorage.removeItem(MAP_DRAFT_KEY);
 }
 
@@ -119,8 +143,13 @@ export function clearMapDraft(): void {
  * screen can be opened cold, from a link or a reload, and a hook that hydrated
  * on mount would paint an empty form first and fill it in afterwards.
  *
- * A draft written by an older build reads as absent, which costs the learner
- * the form they were filling in and nothing else.
+ * What has been set in the meantime wins, field by field. The disk is the older
+ * of the two by definition, and the alternative — the whole stored draft, or
+ * none of it — loses a form somebody is typing into whenever a screen writes one
+ * field before this lands.
+ *
+ * A draft written by an older build reads as absent, which costs the learner the
+ * form they were filling in and nothing else.
  */
 void (async () => {
   const stored = await AsyncStorage.getItem(MAP_DRAFT_KEY);
@@ -131,7 +160,10 @@ void (async () => {
     const parsed = MapDraft.safeParse(JSON.parse(stored));
     if (parsed.success && !settled) {
       settled = true;
-      publish(parsed.data);
+      const held = Object.fromEntries(
+        [...set].map((key) => [key, draft[key]]),
+      ) as Partial<MapDraftT>;
+      publish({ ...parsed.data, ...held });
     }
   } catch {
     // Unreadable JSON is a draft that no longer exists, not a crash on launch.

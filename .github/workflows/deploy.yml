@@ -102,36 +102,6 @@ jobs:
           EXPO_PUBLIC_API_URL: https://${{ env.API_HOST }}
         run: pnpm exec expo export --platform web --output-dir dist
 
-      - name: Sync web app to S3
-        run: |
-          # Hashed assets are cached forever; the two HTML entry points must
-          # always revalidate so a new deploy is picked up immediately.
-          #
-          # `downloads/*` is excluded from the delete as well: the Android APK
-          # there is written by .github/workflows/android.yml and is no part of
-          # this build, so a sync that owned the whole bucket would remove it
-          # every time the web app shipped.
-          aws s3 sync apps/mobile/dist "s3://$S3_BUCKET" \
-            --delete \
-            --exclude index.html \
-            --exclude "android-install/*" \
-            --exclude "downloads/*" \
-            --cache-control "public,max-age=31536000,immutable"
-          aws s3 cp apps/mobile/dist/index.html "s3://$S3_BUCKET/index.html" \
-            --cache-control "no-cache"
-          # Copied from public/ by `expo export`. A tester who has seen this
-          # page once must still get the current one, so it revalidates like
-          # the app shell rather than being cached with the hashed assets.
-          aws s3 cp apps/mobile/dist/android-install/index.html \
-            "s3://$S3_BUCKET/android-install/index.html" \
-            --cache-control "no-cache"
-
-      - name: Invalidate CloudFront
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
-            --paths "/*"
-
       # Runs before the new code, so a deploy that adds a migration applies it.
       - name: Run database migrations
         env:
@@ -196,6 +166,15 @@ jobs:
           rsync -az --delete -e "ssh ${ssh_opts[*]}" \
             deployment/dist/server/ "deploy@$DEPLOY_HOST:/srv/$APP/next/"
 
+          # An empty ALLOWED_ORIGINS is not a permissive default — the API falls
+          # back to localhost and refuses the deployed website every call — so a
+          # deployment that has set neither variable fails here rather than
+          # shipping a site nobody can use.
+          if [ -z "$ALLOWED_ORIGINS" ]; then
+            echo "::error::ALLOWED_ORIGINS is empty. Set the ALLOWED_ORIGINS or SITE_URL repository variable."
+            exit 1
+          fi
+
           # Piped rather than passed as an argument: an argument is visible in
           # `ps` to anything else on the host for as long as the command runs.
           # This rewrites the file each deploy, so it is the workflow — not a
@@ -242,13 +221,57 @@ jobs:
           for attempt in $(seq 1 12); do
             if curl -fsS --max-time 10 "https://$API_HOST/health"; then
               echo; echo "API is serving."
-              exit 0
+              # Not `exit 0`: the web app is published in the step below, and
+              # only because this one passed.
+              exit_code=0
+              break
             fi
             echo "attempt $attempt: not serving yet"
             sleep 5
           done
 
-          echo "::error::$APP-api did not come up. Last 60 log lines:"
-          ssh "${ssh_opts[@]}" "deploy@$DEPLOY_HOST" \
-            "systemctl is-active $APP-api || true; journalctl -u $APP-api -n 60 --no-pager"
-          exit 1
+          if [ "${exit_code:-1}" != "0" ]; then
+            echo "::error::$APP-api did not come up. Last 60 log lines:"
+            ssh "${ssh_opts[@]}" "deploy@$DEPLOY_HOST" \
+              "systemctl is-active $APP-api || true; journalctl -u $APP-api -n 60 --no-pager"
+            exit 1
+          fi
+
+      # The site goes out last, and only once the API it talks to is answering.
+      #
+      # The exported bundle calls api.<domain> directly, so it depends on an API
+      # that has been restarted with ALLOWED_ORIGINS naming this site — and the
+      # process still running until a few steps ago was started without it.
+      # Publishing the bundle first left the live site being refused every call
+      # for the length of the deploy. The bundle already on S3 keeps working in
+      # the meantime: it calls the site's own /api/* route, which CloudFront
+      # still forwards, and same-origin requests are not subject to CORS at all.
+      - name: Sync web app to S3
+        run: |
+          # Hashed assets are cached forever; the two HTML entry points must
+          # always revalidate so a new deploy is picked up immediately.
+          #
+          # `downloads/*` is excluded from the delete as well: the Android APK
+          # there is written by .github/workflows/android.yml and is no part of
+          # this build, so a sync that owned the whole bucket would remove it
+          # every time the web app shipped.
+          aws s3 sync apps/mobile/dist "s3://$S3_BUCKET" \
+            --delete \
+            --exclude index.html \
+            --exclude "android-install/*" \
+            --exclude "downloads/*" \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp apps/mobile/dist/index.html "s3://$S3_BUCKET/index.html" \
+            --cache-control "no-cache"
+          # Copied from public/ by `expo export`. A tester who has seen this
+          # page once must still get the current one, so it revalidates like
+          # the app shell rather than being cached with the hashed assets.
+          aws s3 cp apps/mobile/dist/android-install/index.html \
+            "s3://$S3_BUCKET/android-install/index.html" \
+            --cache-control "no-cache"
+
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/*"

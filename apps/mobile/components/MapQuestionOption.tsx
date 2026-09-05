@@ -99,7 +99,7 @@ export function AnsweredSummary({
   answers: readonly MapAnswerT[];
   action: string;
 }): ReactElement {
-  const picked = pickedOptions(question, answers);
+  const picked = pickedIndexes(answers, question.kind);
   return (
     <>
       <View className="flex-row items-baseline justify-between gap-3">
@@ -110,19 +110,17 @@ export function AnsweredSummary({
       {picked.length === 0 ? (
         <Text className="text-sm text-ink-faint">Skipped</Text>
       ) : (
-        picked.map((option) => (
-          <InlineMarkdown key={option.label} text={option.label} className="text-sm text-ink" />
+        // Keyed by which of the four it is, never by the label: the labels are
+        // model-written, and two of them coming back the same is a bad
+        // generation rather than an impossible one.
+        picked.map((index) => (
+          <InlineMarkdown
+            key={`${question.kind}-${index}`}
+            text={question.options[index]?.label ?? ""}
+            className="text-sm text-ink"
+          />
         ))
       )}
     </>
   );
-}
-
-/** Every option the learner picked, in the order they were shown. */
-export function pickedOptions(
-  question: MapQuestionT,
-  answers: readonly MapAnswerT[],
-): MapQuestionOptionT[] {
-  const picked = new Set(pickedIndexes(answers, question.kind));
-  return question.options.filter((_option, index) => picked.has(index));
 }

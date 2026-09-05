@@ -5,8 +5,10 @@ import {
   DrillKindSchema,
   MapAnswers,
   MapQuestionSet,
-  PublicNode,
+  PublicCard,
+  PublicDrill,
   PublicTopic,
+  PublicTopicDetail,
   contentSettingsOf,
 } from "@interestled/schemas";
 import type { LearningNodeT, PublicMapPlanT, TopicT } from "@interestled/schemas";
@@ -61,13 +63,13 @@ export function publicRouter(db: Db, objects: () => ObjectStore): Hono {
   };
 
   /** One topic of theirs, by the slug in its own URL. */
-  const topicOf = async (username: string, slug: string): Promise<{ userId: string; topic: TopicT }> => {
+  const topicOf = async (username: string, slug: string): Promise<TopicT> => {
     const { id } = await owner(username);
     const row = await db.topic.findFirst({ where: { userId: id, slug } });
     if (row === null) {
       throw new NotFoundError("Topic not found");
     }
-    return { userId: id, topic: toTopic(row) };
+    return toTopic(row);
   };
 
   /**
@@ -104,6 +106,7 @@ export function publicRouter(db: Db, objects: () => ObjectStore): Hono {
     const { id } = await owner(c.req.param("username"));
     const rows = await db.topic.findMany({ where: { userId: id }, orderBy: { createdAt: "desc" } });
     return c.json(rows.map((row) => PublicTopic.parse(toTopic(row))));
+
   });
 
   /**
@@ -117,7 +120,7 @@ export function publicRouter(db: Db, objects: () => ObjectStore): Hono {
    */
   router.get("/:username/topics/:slug", async (c) => {
     const username = c.req.param("username");
-    const { topic } = await topicOf(username, c.req.param("slug"));
+    const topic = await topicOf(username, c.req.param("slug"));
     const [rows, plan] = await Promise.all([
       db.learningNode.findMany({
         where: { topicId: topic.id },
@@ -126,18 +129,22 @@ export function publicRouter(db: Db, objects: () => ObjectStore): Hono {
       }),
       planFor(db, topic.id),
     ]);
-    return c.json({
-      username,
-      topic: PublicTopic.parse(topic),
-      // Parsed rather than mapped by hand: the schema has no status field, so
-      // this is where one stops being able to reach a reader.
-      nodes: rows.map((row) => PublicNode.parse(toNode(row))),
-      plan,
-      instructions: {
-        map: effectiveMapInstructions(topic),
-        content: effectiveContentInstructions(contentSettingsOf(topic)),
-      },
-    });
+    // The whole response goes through its schema on the way out, not just the
+    // nodes: that is what makes "a public route cannot leak a status" a fact
+    // about the code rather than a note in a comment, and it holds for any
+    // field added to a topic or a node later.
+    return c.json(
+      PublicTopicDetail.parse({
+        username,
+        topic,
+        nodes: rows.map(toNode),
+        plan,
+        instructions: {
+          map: effectiveMapInstructions(topic),
+          content: effectiveContentInstructions(contentSettingsOf(topic)),
+        },
+      }),
+    );
   });
 
   /**
@@ -152,11 +159,9 @@ export function publicRouter(db: Db, objects: () => ObjectStore): Hono {
     if (card === null) {
       throw new NotFoundError("Nothing has been written for this node yet");
     }
-    return c.json({
-      node: PublicNode.parse(node),
-      settings: card.settings,
-      content: card.content,
-    });
+    return c.json(
+      PublicCard.parse({ node, settings: card.settings, content: card.content }),
+    );
   });
 
   /** The drill for that node, if one has been generated. Never generated here. */
@@ -170,7 +175,7 @@ export function publicRouter(db: Db, objects: () => ObjectStore): Hono {
       if (existing === null) {
         throw new NotFoundError("No drill has been written for this node yet");
       }
-      return c.json({ node: PublicNode.parse(node), drill: toDrill(existing) });
+      return c.json(PublicDrill.parse({ node, drill: toDrill(existing) }));
     },
   );
 
