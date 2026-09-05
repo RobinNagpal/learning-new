@@ -3,12 +3,7 @@ import { Pressable, View } from "react-native";
 import type { ReactElement } from "react";
 import { Button, InlineMarkdown, SectionTitle, Text } from "@interestled/ui";
 import type { MapAnswerT, MapQuestionT } from "@interestled/schemas";
-import {
-  MapQuestionOption,
-  pickedIndexes,
-  pickedOptions,
-  toggleAnswer,
-} from "./MapQuestionOption";
+import { AnsweredSummary, MapQuestionOption, pickedIndexes, toggleAnswer } from "./MapQuestionOption";
 
 /**
  * The seven choices, one at a time.
@@ -108,33 +103,18 @@ export function MapQuestions({
     return (
       <View className="gap-4">
         <SectionTitle>What you picked</SectionTitle>
-        {questions.map((entry, index) => {
-          const picked = pickedOptions(entry, answers);
-          return (
-            <Pressable
-              key={entry.kind}
-              accessibilityRole="button"
-              accessibilityLabel={`Change your answer: ${entry.question}`}
-              disabled={busy}
-              onPress={() => reopen(index)}
-              className="gap-1 border-b border-line pb-3"
-            >
-              {/* Every line here is model-written, so every line is Markdown. */}
-              <InlineMarkdown text={entry.question} className="text-xs text-ink-faint" />
-              {picked.length === 0 ? (
-                <Text className="text-sm text-ink-faint">Skipped</Text>
-              ) : (
-                picked.map((option) => (
-                  <InlineMarkdown
-                    key={option.label}
-                    text={option.label}
-                    className="text-sm text-ink"
-                  />
-                ))
-              )}
-            </Pressable>
-          );
-        })}
+        {questions.map((entry, index) => (
+          <Pressable
+            key={entry.kind}
+            accessibilityRole="button"
+            accessibilityLabel={`Change your answer: ${entry.question}`}
+            disabled={busy}
+            onPress={() => reopen(index)}
+            className="gap-1 border-b border-line pb-3"
+          >
+            <AnsweredSummary question={entry} answers={answers} action="Change" />
+          </Pressable>
+        ))}
         <Button label={finishLabel} onPress={() => onFinish(answers)} busy={busy} />
       </View>
     );

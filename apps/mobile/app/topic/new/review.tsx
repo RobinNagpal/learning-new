@@ -8,7 +8,6 @@ import {
   Button,
   Disclosure,
   ErrorState,
-  InlineMarkdown,
   Input,
   Screen,
   SectionTitle,
@@ -19,9 +18,9 @@ import { messageOf } from "../../../lib/errors";
 import { clearMapDraft, setMapDraft, topicCreateInput, useMapDraft } from "../../../lib/mapDraft";
 import { useHardwareBack } from "../../../lib/nav";
 import {
+  AnsweredSummary,
   MapQuestionOption,
   pickedIndexes,
-  pickedOptions,
   toggleAnswer,
 } from "../../../components/MapQuestionOption";
 import { MapShapeFields } from "../../../components/MapShapeFields";
@@ -272,7 +271,6 @@ function Choice({
   onAnswers: (answers: MapAnswerT[]) => void;
 }): ReactElement {
   const [open, setOpen] = useState(false);
-  const picked = pickedOptions(question, answers);
   const indexes = new Set(pickedIndexes(answers, question.kind));
 
   return (
@@ -284,18 +282,7 @@ function Choice({
         onPress={() => setOpen(!open)}
         className="gap-1"
       >
-        <View className="flex-row items-baseline justify-between gap-3">
-          {/* Every line of this is model-written, so every line is Markdown. */}
-          <InlineMarkdown text={question.question} className="flex-1 text-xs text-ink-faint" />
-          <Text className="text-xs font-semibold text-accent">{open ? "Done" : "Change"}</Text>
-        </View>
-        {picked.length === 0 ? (
-          <Text className="text-sm text-ink-faint">Skipped</Text>
-        ) : (
-          picked.map((option) => (
-            <InlineMarkdown key={option.label} text={option.label} className="text-sm text-ink" />
-          ))
-        )}
+        <AnsweredSummary question={question} answers={answers} action={open ? "Done" : "Change"} />
       </Pressable>
 
       {open ? (

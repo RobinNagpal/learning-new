@@ -1,6 +1,6 @@
 import { Pressable, View } from "react-native";
 import type { ReactElement } from "react";
-import { InlineMarkdown, Markdown } from "@interestled/ui";
+import { InlineMarkdown, Markdown, Text } from "@interestled/ui";
 import type {
   MapAnswerT,
   MapQuestionKind,
@@ -79,6 +79,43 @@ export function pickedIndexes(
   kind: MapQuestionKind,
 ): readonly number[] {
   return answers.find((answer) => answer.kind === kind)?.optionIndexes ?? [];
+}
+
+/**
+ * What one question was answered with: the question, and the labels picked under
+ * it — or "Skipped", which is a real answer here rather than a blank.
+ *
+ * Drawn in two places, which is why it is not written twice: the stepper's
+ * what-you-picked step, which the rebuild sheet keeps, and the review screen.
+ * `action` is the word on the right of the question, since both are pressed to
+ * change the answer and both should say so.
+ */
+export function AnsweredSummary({
+  question,
+  answers,
+  action,
+}: {
+  question: MapQuestionT;
+  answers: readonly MapAnswerT[];
+  action: string;
+}): ReactElement {
+  const picked = pickedOptions(question, answers);
+  return (
+    <>
+      <View className="flex-row items-baseline justify-between gap-3">
+        {/* Every line of this is model-written, so every line is Markdown. */}
+        <InlineMarkdown text={question.question} className="flex-1 text-xs text-ink-faint" />
+        <Text className="text-xs font-semibold text-accent">{action}</Text>
+      </View>
+      {picked.length === 0 ? (
+        <Text className="text-sm text-ink-faint">Skipped</Text>
+      ) : (
+        picked.map((option) => (
+          <InlineMarkdown key={option.label} text={option.label} className="text-sm text-ink" />
+        ))
+      )}
+    </>
+  );
 }
 
 /** Every option the learner picked, in the order they were shown. */

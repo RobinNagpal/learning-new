@@ -16,7 +16,7 @@
 #            GEMINI_API_KEY                             (the model provider's key)
 #   vars:    S3_BUCKET, CLOUDFRONT_DISTRIBUTION_ID, DEPLOY_HOST, SSH_HOST_KEY,
 #            SITE_URL, LLM_PROVIDER, LLM_MODEL, LLM_CONTENT_MODEL, LLM_AUDIO_MODEL,
-#            AUDIO_BUCKET,
+#            AUDIO_BUCKET, ALLOWED_ORIGINS (defaults to SITE_URL),
 #            MAX_TOPICS_PER_HOUR, MAX_TOPICS_PER_USER, MAX_GENERATED_NODES_PER_HOUR,
 #            MAX_MAP_PLANS_PER_HOUR, MAX_CARDS_WRITTEN_PER_HOUR, MAX_QUESTIONS_PER_HOUR,
 #            MAX_NARRATIONS_PER_HOUR
@@ -92,8 +92,14 @@ jobs:
       - name: Export web app
         working-directory: apps/mobile
         env:
-          # Same origin as the app: CloudFront serves both, so there is no CORS.
-          EXPO_PUBLIC_API_URL: ${{ vars.SITE_URL }}
+          # The API host itself, not the site: CloudFront gives an origin sixty
+          # seconds and a map takes longer than that often enough to matter, so
+          # a working generation came back as a 504 while the server carried on
+          # and finished it. Nothing under /api is cacheable — the behaviour in
+          # front of it has caching disabled — so the edge was adding a deadline
+          # and nothing else. Going straight to Caddy costs a CORS preflight,
+          # which is why ALLOWED_ORIGINS is now deployment configuration.
+          EXPO_PUBLIC_API_URL: https://${{ env.API_HOST }}
         run: pnpm exec expo export --platform web --output-dir dist
 
       - name: Sync web app to S3
@@ -158,6 +164,12 @@ jobs:
           LLM_CONTENT_MODEL: ${{ vars.LLM_CONTENT_MODEL }}
           LLM_AUDIO_MODEL: ${{ vars.LLM_AUDIO_MODEL }}
           AUDIO_BUCKET: ${{ vars.AUDIO_BUCKET }}
+          # Which sites' pages may call this API from a browser. Load-bearing
+          # now that the web app is served from the site and talks to this host
+          # directly: unset, the API allows only localhost and the deployed web
+          # app is refused every request. www redirects to the apex before any
+          # JavaScript runs, so the apex is the only origin a browser sends.
+          ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS || vars.SITE_URL }}
           # Unset means no ceiling, which is what a single-learner deployment
           # wants: a build cut off at CloudFront's 60s still spends the hour's
           # nodes, so a ceiling turns a slow map into a refused retry.
@@ -196,6 +208,7 @@ jobs:
             "LLM_AUDIO_MODEL=$LLM_AUDIO_MODEL" \
             "GEMINI_API_KEY=$GEMINI_API_KEY" \
             "AUDIO_BUCKET=$AUDIO_BUCKET" \
+            "ALLOWED_ORIGINS=$ALLOWED_ORIGINS" \
             "AWS_REGION=$AWS_REGION" \
             "AWS_ACCESS_KEY_ID=$API_AWS_ACCESS_KEY_ID" \
             "AWS_SECRET_ACCESS_KEY=$API_AWS_SECRET_ACCESS_KEY" \

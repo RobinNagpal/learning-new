@@ -40,6 +40,10 @@ env:
   # The native project is generated, never committed, so it is rebuilt here
   # every run and nothing in the repository can drift from it.
   ANDROID_DIR: apps/mobile/android
+  # The same host the web export is pointed at, and for the same reason: the
+  # edge gives an origin sixty seconds, and a map takes longer than that often
+  # enough to matter. See deploy.yml.
+  API_HOST: api.interestled.com
 
 jobs:
   build:
@@ -104,13 +108,15 @@ jobs:
 
       # Gradle runs Metro to bundle the JS, which is where EXPO_PUBLIC_* values
       # are inlined — so this is the step that needs the API URL, not prebuild.
-      # A native app has no origin to be same-origin with, so unlike the web
-      # export this cannot be left empty: an APK built without it installs and
-      # then fails on every request.
+      # A native app has nowhere to fall back to, so unlike the web export this
+      # cannot be left empty: an APK built without it installs and then fails on
+      # every request. It is baked in, so an APK already on a phone keeps
+      # calling whatever it was built with — which is why the site's /api/*
+      # route stays where it is.
       - name: Build the APK
         working-directory: apps/mobile/android
         env:
-          EXPO_PUBLIC_API_URL: ${{ vars.SITE_URL }}
+          EXPO_PUBLIC_API_URL: https://${{ env.API_HOST }}
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
       - name: Configure AWS credentials

@@ -221,6 +221,56 @@ function topicRow(): Record<string, unknown> {
  * the learner has already verified, which is the thing the edit screen exists to
  * avoid.
  */
+/**
+ * The website is served from the site and calls this API on its own host, so
+ * every request it makes is cross-origin. That makes CORS the thing standing
+ * between the deployed app and every call failing — and it fails in the browser
+ * rather than here, which is why it is pinned.
+ */
+describe("cross-origin calls from the website", () => {
+  const SITE = "https://interestled.com";
+
+  const preflight = async (origin: string): Promise<Response> =>
+    createApp(stubDb(null), { provider }).request("/api/topics", {
+      method: "OPTIONS",
+      headers: {
+        Origin: origin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type",
+      },
+    });
+
+  it("admits the site the deployment names, and says the preflight holds", async () => {
+    vi.stubEnv("ALLOWED_ORIGINS", SITE);
+    const response = await preflight(SITE);
+
+    expect(response.headers.get("access-control-allow-origin")).toBe(SITE);
+    // Every call carries an Authorization header, so every call is preflighted.
+    // With no max-age that is two round trips per card.
+    expect(Number(response.headers.get("access-control-max-age"))).toBeGreaterThan(0);
+    expect(response.headers.get("access-control-allow-headers")).toContain("authorization");
+  });
+
+  it("answers a signed-in call from that site with the header the browser needs", async () => {
+    vi.stubEnv("ALLOWED_ORIGINS", SITE);
+    const response = await createApp(stubDb({ token: "good", userId: "u1" }), {
+      provider,
+    }).request("/api/topics", { headers: { Authorization: "Bearer good", Origin: SITE } });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBe(SITE);
+  });
+
+  it("does not let any other page on the internet drive it", async () => {
+    // Every generation call costs money, and a bearer token in another site's
+    // page is not the thing stopping it — this is.
+    vi.stubEnv("ALLOWED_ORIGINS", SITE);
+    const response = await preflight("https://not-interestled.example");
+
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+  });
+});
+
 describe("topic settings writes", () => {
   function settingsDb(row = topicRow()): {
     db: Db;

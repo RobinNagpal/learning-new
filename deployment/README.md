@@ -57,21 +57,35 @@ the same exposure the Lambda Function URL it replaced already had
 the access control. Locking port 443 to CloudFront's published ranges would
 also lock out `curl` when diagnosing a bad deploy, which is when you need it.
 
-## The timeout that is not a default
+## The app does not call the API through CloudFront
 
 Generating a knowledge map is a single large model call that routinely runs
-20–40 seconds, far longer than ordinary CRUD. CloudFront's default origin read
-timeout is 30s, which would turn a working generation into a 504:
+20–40 seconds and sometimes much longer. **CloudFront gives an origin 60 seconds
+and that is the ceiling without a quota increase** — the distribution is already
+set to it (`origin_read_timeout`, up from the 30s default). Past that the edge
+answers 504 while the server carries on and finishes the map, which is the worst
+shape a failure can have: the learner is told it failed, the model has been paid
+for, and the topic quietly appears anyway.
 
-| Setting | Default | Here | Why |
-|---|---|---|---|
-| CloudFront `origin_read_timeout` | 30s | **60s** | 60 is the ceiling without a quota increase |
+So both builds are pointed at `https://api.interestled.com` instead
+(`EXPO_PUBLIC_API_URL` in both workflows). Nothing under `/api` was cacheable —
+the behaviour in front of it has caching disabled — so the edge was contributing
+a deadline and nothing else, and Caddy has no read timeout of its own. The
+ceiling is now Node's own request timeout, five minutes, and there is nothing in
+between.
 
-Caddy imposes no read timeout of its own and the service has no request
-deadline, so CloudFront is the only ceiling on the hop. If generation starts
-timing out, request a CloudFront quota increase — there is nothing else to
-raise. (On Lambda this also needed a function timeout; a long-lived process has
-no equivalent, which is one thing the move simplified.)
+Two things follow, and both are load-bearing:
+
+- **Every call the website makes is cross-origin**, so `ALLOWED_ORIGINS` is
+  production configuration rather than a local-development convenience. The
+  deploy writes it from `vars.ALLOWED_ORIGINS`, defaulting to `SITE_URL`; unset,
+  the API allows localhost only and the deployed app is refused every request.
+  The preflight is cached for two hours (Chrome's own cap), or every call would
+  be two round trips.
+- **The distribution's `/api/*` behaviour stays where it is.** An APK bakes its
+  URL in at build time, so every phone with an older build installed is still
+  calling the site — removing that route breaks them, and it costs nothing to
+  keep.
 
 ## The Android build
 
@@ -106,10 +120,12 @@ build they are; keep those and you can point a tester at the build before the
 one that broke.
 
 **`EXPO_PUBLIC_API_URL` is load-bearing here in a way it is not on the web.**
-The web export leaves it empty on purpose — CloudFront serves the app and the
-API from one origin, so a relative path is right. An APK has no origin, so the
-Android build bakes in `vars.SITE_URL`; built without it, the app installs and
-then fails on its first request.
+Both builds are pointed at `https://api.interestled.com` (see *The app does not
+call the API through CloudFront*), but the web export would fall back to a
+relative path built without it and the app would still work. An APK has no
+origin to fall back to: built without it, it installs and then fails on its first
+request. It is also baked in for the life of that APK, which is why the site's
+`/api/*` route has to keep working.
 
 ### Why not EAS
 
@@ -249,6 +265,7 @@ Then wire up GitHub Actions (**Settings → Secrets and variables → Actions**)
 | Variable | `DEPLOY_HOST` | shared-host: `terraform output -raw static_ip` |
 | Variable | `SSH_HOST_KEY` | `ssh-keyscan -t rsa,ecdsa,ed25519 <static-ip>` |
 | Variable | `SITE_URL` | `https://interestled.com` |
+| Variable | `ALLOWED_ORIGINS` | which sites may call the API from a browser — optional, and `SITE_URL` if unset |
 | Variable | `LLM_PROVIDER` | `gemini` |
 | Variable | `LLM_MODEL` | `gemini-3.1-pro-preview` — the model that builds maps |
 | Variable | `LLM_CONTENT_MODEL` | `gemini-3.7-flash` — the model that writes cards, drills and verdicts |
@@ -291,8 +308,8 @@ deploy time.
 
 Push to `main`. `.github/workflows/deploy.yml`:
 
-1. exports the web app with `EXPO_PUBLIC_API_URL=${{ vars.SITE_URL }}` baked in,
-   syncs it to S3 and invalidates CloudFront;
+1. exports the web app with `EXPO_PUBLIC_API_URL=https://api.interestled.com`
+   baked in, syncs it to S3 and invalidates CloudFront;
 2. runs `prisma migrate deploy`;
 3. bundles `apps/server/src/index.ts` with esbuild
    (`deployment/scripts/build-server.sh`);

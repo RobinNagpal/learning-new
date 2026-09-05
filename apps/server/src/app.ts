@@ -25,11 +25,17 @@ function uniqueMessage(error: Prisma.PrismaClientKnownRequestError): string {
 }
 
 /**
- * Same-origin in production — CloudFront serves the app and /api/* from one
- * domain — so CORS exists only for local development, where the Expo dev server
- * is on a different port. Defaulting to "*" would let any site on the internet
- * drive this API, which matters more than usual when every generation call
- * costs money.
+ * Which sites' pages may call this API from a browser.
+ *
+ * **Production configuration, not a local-development convenience.** The web app
+ * is served from the site and calls this host directly rather than through
+ * CloudFront — the edge gives an origin sixty seconds and a map takes longer
+ * than that often enough to matter — so every call the website makes is
+ * cross-origin. With `ALLOWED_ORIGINS` unset the deployed app is refused every
+ * request, and the fallback below is only any use on a laptop.
+ *
+ * Defaulting to "*" instead would let any site on the internet drive this API,
+ * which matters more than usual when every generation call costs money.
  */
 function allowedOrigins(): string[] {
   const configured = process.env.ALLOWED_ORIGINS;
@@ -100,7 +106,17 @@ export function createApp(db: Db, options: AppOptions = {}): Hono {
     });
 
   const origins = allowedOrigins();
-  app.use("*", cors({ origin: (origin) => (origins.includes(origin) ? origin : null) }));
+  app.use(
+    "*",
+    cors({
+      origin: (origin) => (origins.includes(origin) ? origin : null),
+      // Every call carries an Authorization header, which makes every one of
+      // them preflighted. Without a max-age the browser asks again before each
+      // request — two round trips to the other side of the world for every card
+      // — and Chrome's own cap is two hours, so this is the number it uses.
+      maxAge: 7200,
+    }),
+  );
   app.get("/health", (c) => c.json({ ok: true }));
 
   app.route("/api/auth", authRouter(db));

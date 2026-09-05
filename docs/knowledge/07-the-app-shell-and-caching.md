@@ -77,6 +77,15 @@ the surface stays visible. **Every response is parsed by a Zod schema from
 `packages/schemas`** — an unrecognised value fails loudly at the boundary rather
 than flowing through the app.
 
+**The app calls `api.interestled.com` directly, not the site.** `API_URL` comes from
+`EXPO_PUBLIC_API_URL`, baked in at build time by both workflows. CloudFront gives an
+origin sixty seconds and a map generation takes longer than that often enough to
+matter, so the edge was turning a working build into a 504 while the server finished
+it; nothing under `/api` was cacheable, so it was contributing a deadline and nothing
+else. Two consequences: every call the website makes is cross-origin, so the API's
+`ALLOWED_ORIGINS` is production configuration (`apps/server/src/app.ts`), and the
+site's own `/api/*` route has to keep working for APKs that baked it in.
+
 `ApiError` carries the status, and — on a build that failed — the slug of the
 topic it left behind, so a retry rebuilds that topic rather than creating a
 second one (doc 1). A `401` calls `onUnauthorized`, which drops a session the

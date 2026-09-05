@@ -78,11 +78,12 @@ resource "aws_cloudfront_distribution" "web" {
       origin_protocol_policy = "https-only"
       origin_ssl_protocols   = ["TLSv1.2"]
 
-      # Generating a knowledge map is one large model call and routinely runs
-      # 20-40 seconds. CloudFront's default origin read timeout is 30s, which
-      # would turn a working generation into a 504, so this is raised to the
-      # maximum available without requesting a quota increase. Caddy imposes no
-      # read timeout of its own, so this is the only ceiling on the hop.
+      # 60s is the maximum available without a quota increase, up from the 30s
+      # default. It is still not enough for a map generation, which is why both
+      # builds now call api.<domain> directly and this path exists only for the
+      # APKs that baked the site in — see "The app does not call the API through
+      # CloudFront" in deployment/README.md. Anything served from here is
+      # therefore still on a sixty-second leash.
       origin_keepalive_timeout = 60
       origin_read_timeout      = 60
     }
@@ -103,6 +104,10 @@ resource "aws_cloudfront_distribution" "web" {
     }
   }
 
+  # Kept for older clients rather than for the current app: an APK bakes its API
+  # URL in at build time, so a phone with an earlier build installed is still
+  # calling the site. Nothing here is cached (caching_disabled), so this route
+  # only forwards.
   ordered_cache_behavior {
     path_pattern               = "/api/*"
     target_origin_id           = local.api_origin_id

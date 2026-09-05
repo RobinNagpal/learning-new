@@ -824,9 +824,15 @@ restarts the API. There is no staging environment — `main` is production.
 
 **The API is a process, not a Lambda.** It runs as the `interestled-api` systemd unit
 on port **7072** of a Lightsail instance **shared with courtpot**, which runs on 7071.
-Caddy on that box terminates TLS for `api.interestled.com` and proxies to 7072;
-CloudFront serves `/api/*` from there and everything else from S3, so production is
-same-origin and CORS exists only for local development.
+Caddy on that box terminates TLS for `api.interestled.com` and proxies to 7072, and
+**both builds call that host directly rather than through CloudFront**. The edge gives
+an origin 60 seconds, which is its ceiling without a quota increase, and a map takes
+longer than that often enough to matter — the 504 then lands on a learner while the
+server finishes the map anyway. Nothing under `/api` was cacheable, so the edge was
+contributing a deadline and nothing else. The distribution's `/api/*` route stays where
+it is for the APKs that baked the site in, and `ALLOWED_ORIGINS` is now production
+configuration rather than a local-development convenience: unset, the deployed website
+is refused every call.
 
 That the host is shared is the thing to remember when changing anything runtime-shaped:
 
@@ -835,9 +841,8 @@ That the host is shared is the thing to remember when changing anything runtime-
   a runaway generation loop is a two-application outage.
 - **The process is long-lived.** No cold start to design around, but also no fresh
   container to tidy up after a leak, and no Lambda function timeout killing a runaway
-  call at 120s. The practical ceiling on a slow generation is now CloudFront's 60s
-  origin read timeout — Caddy adds none, and Node's own 5-minute request timeout is
-  far above it.
+  call at 120s. With the edge out of the path the practical ceiling on a slow generation
+  is Node's own 5-minute request timeout — Caddy adds none of its own.
 - The bundle stays **CommonJS** and ships the `debian-openssl-3.0.x` Prisma engine
   beside it, because the generated client requires its engine at runtime from its own
   directory. A top-level `await` in `src/index.ts` would force ESM and break that.
