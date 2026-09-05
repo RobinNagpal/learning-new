@@ -11,6 +11,7 @@ import type { Background } from "./narration";
 import { createProvider, createSpeechProvider } from "./llm";
 import type { LlmProvider, SpeechProvider } from "./llm";
 import { profileRouter } from "./profile";
+import { publicRouter } from "./public";
 import { reviewRouter } from "./review";
 import { sessionsRouter } from "./sessions";
 import { createObjectStore } from "./storage";
@@ -120,6 +121,17 @@ export function createApp(db: Db, options: AppOptions = {}): Hono {
   app.get("/health", (c) => c.json({ ok: true }));
 
   app.route("/api/auth", authRouter(db));
+
+  /**
+   * Public reads, addressed by username. Registered before the authenticated
+   * sub-app because that one is mounted on "/api" and its middleware would
+   * otherwise answer these with a 401.
+   *
+   * It is handed no provider, which is not an omission: nothing under here may
+   * generate, or reading somebody's map would spend their model budget. See
+   * public.ts for what is public and what is not.
+   */
+  app.route("/api/u", publicRouter(db, objects));
 
   const authed = new Hono<AuthEnv>();
   authed.use("*", requireAuth(db));

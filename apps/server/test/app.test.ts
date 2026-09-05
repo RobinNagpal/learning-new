@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CardAngle,
   ContentFormat,
+  DrillKind,
   EnglishLevel,
   DEFAULT_AVERAGE_READ_TIME,
   LearningStyle,
@@ -10,6 +11,8 @@ import {
   MAP_QUESTION_KINDS,
   MapPlanView,
   MapQuestionKind,
+  PublicCard,
+  PublicTopicDetail,
   NARRATION_TIMED_OUT,
   NARRATION_TIMEOUT_MS,
   DEFAULT_NARRATION_VOICE,
@@ -71,15 +74,15 @@ function stubDb(
   const db = {
     user: {
       findUnique: vi.fn(async () => null),
-      // Registration allocates a slug, which means reading the ones already
+      // Registration allocates a username, which means reading the ones already
       // handed out that could collide with it.
       findMany: vi.fn(async () => []),
-      create: vi.fn(async ({ data }: { data: { slug: string } }) => ({
+      create: vi.fn(async ({ data }: { data: { username: string } }) => ({
         id: "u1",
         email: "a@b.com",
-        // Echoed back rather than fixed, so a test can assert what the folder
-        // this account's recordings go in was actually named.
-        slug: data.slug,
+        // Echoed back rather than fixed, so a test can assert what this account
+        // is addressed by — and what its recordings' folder is named.
+        username: data.username,
         // The column's own default, which the real row always carries: the
         // register response says where this learner's cards will start.
         defaultDepth: 2,
@@ -100,7 +103,7 @@ function stubDb(
               token: session.token,
               userId: session.userId,
               expiresAt: session.expiresAt ?? new Date(Date.now() + 60_000),
-              user: { id: session.userId, defaultDepth: 2, slug: "robin" },
+              user: { id: session.userId, defaultDepth: 2, username: "robin" },
             }
           : null,
       ),
@@ -289,7 +292,7 @@ describe("topic settings writes", () => {
           token: "good",
           userId: "u1",
           expiresAt: new Date(Date.now() + 60_000),
-          user: { id: "u1", defaultDepth: 2, slug: "robin" },
+          user: { id: "u1", defaultDepth: 2, username: "robin" },
         })),
         deleteMany: vi.fn(async () => ({ count: 0 })),
       },
@@ -1770,7 +1773,7 @@ describe("reading a card out", () => {
 
   /** The key this learner's recording of that card belongs at. */
   const KEY = narrationKey({
-    userSlug: "robin",
+    username: "robin",
     topicSlug: "kubernetes",
     nodePath: "pods/restarts",
     voice: DEFAULT_NARRATION_VOICE,
@@ -1878,7 +1881,7 @@ describe("reading a card out", () => {
           expiresAt: new Date(Date.now() + 60_000),
           // The slug rides on the session, like the depth: it never changes,
           // and the alternative is a second query on every card view.
-          user: { id: "u1", defaultDepth: 2, slug: "robin" },
+          user: { id: "u1", defaultDepth: 2, username: "robin" },
         })),
       },
       learningNode: {
@@ -2435,5 +2438,284 @@ describe("reading a card out", () => {
     expect(response.status).toBe(502);
     expect(await response.json()).toMatchObject({ error: expect.stringContaining("AUDIO_BUCKET") });
     expect(stub.row()).toBeNull();
+  });
+});
+
+/**
+ * Reading somebody's work without being anybody.
+ *
+ * The line these pin is the one the product now rests on: **what was generated
+ * is public, and what the learner did with it is not.** Everything a model
+ * wrote — the map, the answers it was built from, the cards, the drills, the
+ * questions asked on one — is readable by anyone with the username. Statuses,
+ * progress, the resume point and the profile are not, and no route here can
+ * spend the owner's model budget.
+ */
+describe("public reads", () => {
+  const PLAN_QUESTIONS = MAP_QUESTION_KINDS.map((kind) => ({
+    kind,
+    question: `A question about ${kind}?`,
+    options: [0, 1, 2, 3].map((index) => ({
+      label: `Option ${index}`,
+      sample: [`A sample line for ${kind} ${index}`],
+    })),
+  }));
+
+  /** The settings the stored card below was written to. */
+  const written = {
+    depth: 2,
+    minutes: 3,
+    englishLevel: EnglishLevel.Medium,
+    technicalDetail: TechnicalDetail.Medium,
+    format: ContentFormat.Prose,
+    paragraphLength: ParagraphLength.Medium,
+    angle: CardAngle.Base,
+    instructions: "",
+  };
+
+  const CARD_CONTENT = {
+    claim: "A pod is the unit of scheduling.",
+    mechanism: [{ heading: "What schedules a pod", body: "The scheduler places pods." }],
+    jargon: [],
+  };
+
+  function nodeRows(): Record<string, unknown>[] {
+    const base = {
+      topicId: "t1",
+      archetype: TopicArchetype.Tool,
+      capability: "do it",
+      cardInstructions: "",
+      createdAt: new Date(),
+      prerequisites: [],
+    };
+    return [
+      {
+        ...base,
+        id: "g1",
+        parentId: null,
+        path: "pods",
+        title: "Pods",
+        claim: "c",
+        minutes: 0,
+        orderIndex: 0,
+        // The learner is part way through. None of this may reach a reader.
+        status: NodeStatus.Verified,
+      },
+      {
+        ...base,
+        id: "n1",
+        parentId: "g1",
+        path: "pods/restarts",
+        title: "Restarts",
+        claim: "c",
+        minutes: 3,
+        orderIndex: 1,
+        status: NodeStatus.Shaky,
+      },
+    ];
+  }
+
+  function publicDb(options: { card?: boolean; drill?: boolean } = {}): {
+    db: Db;
+    writes: string[];
+  } {
+    // Anything that would change a row or spend a model call lands here, so a
+    // test can say "reading this cost the owner nothing" and mean it.
+    const writes: string[] = [];
+    const record = (what: string) => async () => {
+      writes.push(what);
+      return { count: 0 };
+    };
+    const db = {
+      user: {
+        findUnique: vi.fn(async ({ where }: { where: { username: string } }) =>
+          where.username === "robin" ? { id: "u1", username: "robin" } : null,
+        ),
+        update: vi.fn(record("user.update")),
+      },
+      topic: {
+        findMany: vi.fn(async ({ where }: { where: { userId: string } }) =>
+          where.userId === "u1" ? [topicRow()] : [],
+        ),
+        findFirst: vi.fn(async ({ where }: { where: { userId: string; slug: string } }) =>
+          where.userId === "u1" && where.slug === "kubernetes" ? topicRow() : null,
+        ),
+      },
+      learningNode: {
+        findMany: vi.fn(async () => nodeRows()),
+        findFirst: vi.fn(async ({ where }: { where: { id: string } }) => {
+          const row = nodeRows().find((candidate) => candidate.id === where.id);
+          return row === undefined ? null : { ...row, topic: topicRow() };
+        }),
+        update: vi.fn(record("learningNode.update")),
+        count: vi.fn(async () => 0),
+      },
+      mapPlan: {
+        findMany: vi.fn(async () => [
+          {
+            id: "p1",
+            questions: PLAN_QUESTIONS,
+            answers: [{ kind: MapQuestionKind.Outline, optionIndexes: [1] }],
+            createdAt: new Date(),
+          },
+        ]),
+      },
+      conceptCard: {
+        findFirst: vi.fn(async () =>
+          options.card === true
+            ? {
+                depth: written.depth,
+                variant: cardVariant(written),
+                instructions: "",
+                content: CARD_CONTENT,
+                createdAt: new Date(),
+              }
+            : null,
+        ),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(record("conceptCard.upsert")),
+        count: vi.fn(async () => 0),
+      },
+      drill: {
+        findFirst: vi.fn(async () =>
+          options.drill === true
+            ? {
+                id: "d1",
+                nodeId: "n1",
+                kind: DrillKind.Apply,
+                prompt: "Do the thing",
+                completionTest: "It restarts",
+                referencePoints: ["the probe fails"],
+                hints: [],
+                createdAt: new Date(),
+              }
+            : null,
+        ),
+        create: vi.fn(record("drill.create")),
+      },
+      cardQuestion: {
+        findMany: vi.fn(async () => [
+          { id: "q1", nodeId: "n1", question: "Why?", answer: "Because.", createdAt: new Date() },
+        ]),
+      },
+      cardNarration: { findUnique: vi.fn(async () => null) },
+      authSession: { findUnique: vi.fn(async () => null) },
+    };
+    return { db: db as unknown as Db, writes };
+  }
+
+  /**
+   * A provider that fails the test if it is ever reached. The public router is
+   * handed none at all, so this is really a guard on the wiring: a public read
+   * that generated would be a stranger spending the owner's model budget.
+   */
+  const noGeneration = (): ((task: LlmTask) => LlmProvider) => () => {
+    throw new Error("a public read generated something");
+  };
+
+  const get = async (db: Db, path: string): Promise<Response> =>
+    createApp(db, { provider: noGeneration() }).request(path);
+
+  it("lists a learner's topics to nobody in particular", async () => {
+    const { db } = publicDb();
+    const response = await get(db, "/api/u/robin/topics");
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { title: string; userId?: string }[];
+    expect(body[0]?.title).toBe("Kubernetes");
+    // The owner's id says nothing a reader can use and is not theirs to have.
+    expect(body[0]?.userId).toBeUndefined();
+  });
+
+  it("answers a username nobody holds with a 404, and lists no usernames anywhere", async () => {
+    const { db } = publicDb();
+    expect((await get(db, "/api/u/nobody/topics")).status).toBe(404);
+    // There is no route above the username: a name is something you are told.
+    expect((await get(db, "/api/u")).status).toBe(404);
+  });
+
+  it("serves the map and everything it was built from, and no progress at all", async () => {
+    const { db } = publicDb();
+    const response = await get(db, "/api/u/robin/topics/kubernetes");
+
+    expect(response.status).toBe(200);
+    // Parsed rather than read loosely: the schema is the contract, and it is
+    // what has no field for a status.
+    const body = PublicTopicDetail.parse(await response.json());
+    expect(body.nodes.map((node) => node.title)).toEqual(["Pods", "Restarts"]);
+    expect(body.plan?.questions).toHaveLength(MAP_QUESTION_KINDS.length);
+    expect(body.plan?.answers[0]?.optionIndexes).toEqual([1]);
+    // The lines the model was actually given, not the "" that stands for them.
+    expect(body.instructions.map).toContain("7 main headings");
+    expect(body.instructions.content).not.toBe("");
+
+    const raw = JSON.parse(JSON.stringify(body)) as Record<string, unknown>;
+    expect(raw.progress).toBeUndefined();
+    expect(raw.resume).toBeUndefined();
+    for (const node of body.nodes) {
+      expect(Object.keys(node)).not.toContain("status");
+    }
+  });
+
+  it("serves a card that exists, and marks nothing seen by doing it", async () => {
+    const { db, writes } = publicDb({ card: true });
+    const response = await get(db, "/api/u/robin/nodes/n1/card");
+
+    expect(response.status).toBe(200);
+    const body = PublicCard.parse(await response.json());
+    expect(body.content.claim).toBe(CARD_CONTENT.claim);
+    // What it was written to, which is half of "how this was generated".
+    expect(body.settings.depth).toBe(written.depth);
+    // Reading somebody's card is not studying it: no status moves, no depth is
+    // remembered, and nothing at all is written.
+    expect(writes).toEqual([]);
+  });
+
+  it("refuses a card nobody has written rather than writing one", async () => {
+    // The point of the whole router: a visitor walking a map must not be able
+    // to spend its owner's model budget a node at a time.
+    const { db, writes } = publicDb({ card: false });
+    const response = await get(db, "/api/u/robin/nodes/n1/card");
+
+    expect(response.status).toBe(404);
+    expect(writes).toEqual([]);
+  });
+
+  it("serves a drill that exists and refuses to write one that does not", async () => {
+    const { db: withDrill } = publicDb({ drill: true });
+    const found = await get(withDrill, "/api/u/robin/nodes/n1/drill?kind=apply");
+    expect(found.status).toBe(200);
+    expect(((await found.json()) as { drill: { prompt: string } }).drill.prompt).toBe("Do the thing");
+
+    const { db: without, writes } = publicDb({ drill: false });
+    expect((await get(without, "/api/u/robin/nodes/n1/drill?kind=apply")).status).toBe(404);
+    expect(writes).toEqual([]);
+  });
+
+  it("serves the questions asked on a card, which are content like the rest", async () => {
+    const { db } = publicDb();
+    const response = await get(db, "/api/u/robin/nodes/n1/questions");
+    expect(response.status).toBe(200);
+    expect((await response.json()) as unknown[]).toHaveLength(1);
+  });
+
+  it("will not answer for a node under a username that does not own it", async () => {
+    // The id alone would find the row. Scoping to the name as well is what makes
+    // a public URL actually about the person it names.
+    const { db } = publicDb();
+    (db as unknown as { user: { findUnique: ReturnType<typeof vi.fn> } }).user.findUnique = vi.fn(
+      async () => ({ id: "u2", username: "someone-else" }),
+    );
+    expect((await get(db, "/api/u/someone-else/nodes/n1/card")).status).toBe(404);
+  });
+
+  it("leaves every write where it was, behind a token", async () => {
+    const { db } = publicDb();
+    const app = createApp(db, { provider: noGeneration() });
+    // Nothing under the public prefix answers anything but a GET…
+    const posted = await app.request("/api/u/robin/topics", { method: "POST" });
+    expect(posted.status).toBe(404);
+    // …and the authenticated routes are untouched by any of this.
+    expect((await app.request("/api/topics")).status).toBe(401);
   });
 });

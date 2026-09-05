@@ -86,6 +86,10 @@ else. Two consequences: every call the website makes is cross-origin, so the API
 `ALLOWED_ORIGINS` is production configuration (`apps/server/src/app.ts`), and the
 site's own `/api/*` route has to keep working for APKs that baked it in.
 
+**Every call the app makes is authenticated.** There is a second, public half of
+the API — `/api/u/:username/...`, reads of generated content by anyone — which
+nothing in the app calls yet; it is documented in doc 5.
+
 `ApiError` carries the status, and — on a build that failed — the slug of the
 topic it left behind, so a retry rebuilds that topic rather than creating a
 second one (doc 1). A `401` calls `onUnauthorized`, which drops a session the

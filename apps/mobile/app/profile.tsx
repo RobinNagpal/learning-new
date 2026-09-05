@@ -5,6 +5,7 @@ import { useProfile, useUpdateProfile } from "@interestled/api";
 import { Button, ErrorState, Screen, Input, LoadingContent } from "@interestled/ui";
 import { LEARNING_STYLES, LEARNING_STYLE_LABELS } from "@interestled/schemas";
 import type { LearningStyle, ProfileT } from "@interestled/schemas";
+import { useAuth } from "../lib/auth";
 import { messageOf } from "../lib/errors";
 import { useHardwareBack } from "../lib/nav";
 import { ChipMultiRow } from "../components/ChipRow";
@@ -32,6 +33,7 @@ export default function ProfileScreen(): ReactElement {
   // The bar for this screen is set in the navigator, so the hardware button is
   // wired here — both of them go to the topics list.
   useHardwareBack("/");
+  const { user } = useAuth();
   const profile = useProfile();
   const save = useUpdateProfile();
   const [age, setAge] = useState("");
@@ -69,6 +71,20 @@ export default function ProfileScreen(): ReactElement {
 
   return (
     <Screen contentContainerClassName="gap-5 p-4">
+      {/* First, because it is the one thing on this screen that other people
+          see. Nothing else here is public — the answers below are read by the
+          model and by nobody else. */}
+      {user === null ? null : (
+        <View className="gap-1 rounded-card border border-line bg-surface p-3">
+          <Text className="text-xs text-ink-faint">Your username</Text>
+          <Text className="text-base font-semibold text-ink">{user.username}</Text>
+          <Text className="text-xs text-ink-faint">
+            Anyone with this can read the maps and cards you have made. What you have finished, and
+            everything on this screen, stays yours.
+          </Text>
+        </View>
+      )}
+
       <Text className="text-sm text-ink-soft">
         Answered once. Every map and card after this is written to it.
       </Text>

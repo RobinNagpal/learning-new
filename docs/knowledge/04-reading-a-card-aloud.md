@@ -140,7 +140,7 @@ name is the recording's identity — revision, voice, depth, card variant — so
 card re-recorded in the same voice at the same settings **overwrites its own
 object**, and any of the four changing gets its own.
 
-`users.slug` is allocated at registration from the address and never changed —
+`users.username` is allocated at registration from the address and never changed —
 changing it orphans everything already recorded. See doc 5.
 
 `NARRATION_PROMPT_REVISION` travels in the key, and the row stores the key it was

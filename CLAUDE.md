@@ -198,11 +198,33 @@ can write over the lines, so every setting says itself in `content-rules.md` as 
 
 ## Accounts and sessions
 
-**There are no roles.** Every user sees only their own rows, there is no admin, and
-nothing is shared between accounts — so authorisation is ownership, checked by scoping
-each query to `c.get("userId")`. A query that forgets the scope is a data leak, not a
-missing feature. This is the whole of the model; do not add a role column without a
-reason that survives that sentence.
+**There are no roles, and there are two kinds of route.** Every *write* is ownership,
+checked by scoping the query to `c.get("userId")`: a write that forgets the scope is a
+data leak, not a missing feature. Every *read* of generated content is public, addressed
+by the owner's username under `/api/u/:username` (`src/public.ts`). There is no admin and
+no sharing model between accounts; do not add a role column without a reason that
+survives that sentence.
+
+**What was generated is public; what the learner did with it is not.** The map, the
+seven answers it was built from, the settings and instruction lines it was written to,
+the cards, the drills and the questions asked on a card are model output somebody paid
+for once. Which nodes they have finished, what is due for review, where they left off and
+their profile are the record of a person studying, and stay theirs. `PublicNode` is
+`LearningNode` without `status`, so a public route cannot leak one and still compile —
+that is the line, and it is held by the type rather than by care.
+
+Two properties of the public router make it safe to leave open, and both are structural
+rather than promised: it is handed **no LLM provider**, so a stranger walking somebody's
+map cannot spend their model budget — a card that has never been written answers 404
+rather than being written on the spot — and it **writes nothing**, so reading a card does
+not mark it seen for its owner. Both are why these are their own routes rather than the
+authenticated ones with the ownership check taken off: those generate on a miss.
+
+**A username is what a learner is addressed by**, and it is the old `users.slug` grown a
+second job. It is allocated once at registration from the email (`emailSlug` then
+`uniqueSlug`), never changed — the audio bucket is laid out by it, so a new one orphans
+every recording — and it is unique. Nothing lists usernames: a name is something you are
+given, not something to walk.
 
 Identity is email + password, in `src/auth.ts` and `src/password.ts`:
 
@@ -525,10 +547,10 @@ by tests.
   it has and records again on the next press. `card_narrations.voice` stays a plain
   string, because it says which voice made a recording that already exists and that may
   be one the enum has since dropped.
-- **The bucket is laid out by slug, and the key is the recording's identity.**
-  `narrationKey` builds `<user>/<topic>/<node path>/n<rev>-<voice>-d<depth>-<variant>.wav`,
+- **The bucket is laid out by username, and the key is the recording's identity.**
+  `narrationKey` builds `<username>/<topic>/<node path>/n<rev>-<voice>-d<depth>-<variant>.wav`,
   so a card re-recorded in the same voice at the same settings overwrites its own object
-  and any of the four changing gets its own. `users.slug` is allocated at registration from the address —
+  and any of the four changing gets its own. `users.username` is allocated at registration from the address —
   `emailSlug` then `uniqueSlug`, because two accounts at two providers can hold the same
   local part and their folders must not be the same folder — and never changed, because
   changing it orphans everything already recorded. It rides on the session beside

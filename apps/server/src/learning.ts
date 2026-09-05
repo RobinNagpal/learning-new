@@ -107,7 +107,7 @@ enum CardLookup {
 }
 
 /** What a caller gets back: the card, and what it was actually written to. */
-interface WrittenCard {
+export interface WrittenCard {
   content: CardContentT;
   settings: CardSettingsT;
 }
@@ -128,6 +128,23 @@ interface CardRow {
 function writtenCard(row: CardRow): WrittenCard | null {
   const settings = parseCardVariant(row.variant, row.depth, row.instructions);
   return settings === null ? null : { content: CardContent.parse(row.content), settings };
+}
+
+/**
+ * The newest card this node has, at any settings: the one the learner last read.
+ * Newest rather than nearest, because "the card you were looking at" is a rule a
+ * reader can predict and "the closest match" is not. Null when the node has none
+ * at all, or none from this prompt revision.
+ *
+ * Exported because it is the whole of what a public read may do — that side has
+ * no provider to generate with, and this is the lookup that cannot.
+ */
+export async function newestCard(db: Db, nodeId: string): Promise<WrittenCard | null> {
+  const latest = await db.conceptCard.findFirst({
+    where: { nodeId },
+    orderBy: { createdAt: "desc" },
+  });
+  return latest === null ? null : writtenCard(latest);
 }
 
 /**
@@ -169,15 +186,7 @@ async function cardFor(
       };
     }
     if (lookup === CardLookup.Written) {
-      // The newest card this node has, at any settings: the one the learner
-      // last read. Newest rather than nearest, because "the card you were
-      // looking at" is a rule a reader can predict and "the closest match" is
-      // not.
-      const latest = await db.conceptCard.findFirst({
-        where: { nodeId: node.id },
-        orderBy: { createdAt: "desc" },
-      });
-      const existing = latest === null ? null : writtenCard(latest);
+      const existing = await newestCard(db, node.id);
       if (existing !== null) {
         return existing;
       }
@@ -331,7 +340,7 @@ async function audioTarget(
   await refuseGroup(db, node);
   return {
     userId,
-    userSlug: c.get("userSlug"),
+    username: c.get("username"),
     topic,
     node,
     settings: { ...query, instructions: node.cardInstructions },
