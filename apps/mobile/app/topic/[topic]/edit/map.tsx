@@ -69,6 +69,10 @@ export default function EditMapScreen(): ReactElement {
   // replaced is part of what they are asked about, so the answers given the
   // first time were answers about a different map.
   const [plan, setPlan] = useState<MapPlanViewT | null>(null);
+  // The picks so far. Held here rather than inside the stepper because the
+  // create flow keeps them in the draft that outlives its screens, and one
+  // component with two ideas of where its state lives is one that drifts.
+  const [answers, setAnswers] = useState<MapAnswerT[]>([]);
 
   const header = (
     <Stack.Screen
@@ -108,6 +112,7 @@ export default function EditMapScreen(): ReactElement {
     setShape(mapShapeOf(topic.data.topic));
     setMapInstructions(topic.data.topic.mapInstructions);
     setPlan(null);
+    setAnswers([]);
     setRebuilding({ kind: "map" });
   };
 
@@ -120,6 +125,7 @@ export default function EditMapScreen(): ReactElement {
   const closeRebuild = (): void => {
     setRebuilding(null);
     setPlan(null);
+    setAnswers([]);
   };
 
   /**
@@ -146,12 +152,12 @@ export default function EditMapScreen(): ReactElement {
     );
   };
 
-  const submitMapRebuild = (answers: MapAnswerT[]): void => {
+  const submitMapRebuild = (picked: readonly MapAnswerT[]): void => {
     if (shape === null) {
       return;
     }
     rebuildMap.mutate(
-      { ...shape, mapInstructions, planId: plan?.planId, answers },
+      { ...shape, mapInstructions, planId: plan?.planId, answers: [...picked] },
       { onSuccess: closeRebuild },
     );
   };
@@ -285,6 +291,8 @@ export default function EditMapScreen(): ReactElement {
           <>
             <MapQuestions
               questions={plan.questions}
+              answers={answers}
+              onAnswers={setAnswers}
               finishLabel={rebuildMap.isPending ? "Building…" : "Build it again"}
               busy={rebuildMap.isPending}
               onFinish={submitMapRebuild}

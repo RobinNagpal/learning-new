@@ -5,12 +5,14 @@ import type { TextTask } from "@interestled/schemas";
 import { authRouter, requireAuth, sessionRouter } from "./auth";
 import type { AuthEnv } from "./auth";
 import type { Db } from "./db";
+import { getLimits } from "./env";
 import { ConflictError, GenerationError, NotFoundError, UniqueViolation } from "./errors";
 import { learningRouter } from "./learning";
 import type { Background } from "./narration";
 import { createProvider, createSpeechProvider } from "./llm";
 import type { LlmProvider, SpeechProvider } from "./llm";
 import { profileRouter } from "./profile";
+import { publicRouter } from "./public";
 import { reviewRouter } from "./review";
 import { sessionsRouter } from "./sessions";
 import { createObjectStore } from "./storage";
@@ -25,11 +27,17 @@ function uniqueMessage(error: Prisma.PrismaClientKnownRequestError): string {
 }
 
 /**
- * Same-origin in production — CloudFront serves the app and /api/* from one
- * domain — so CORS exists only for local development, where the Expo dev server
- * is on a different port. Defaulting to "*" would let any site on the internet
- * drive this API, which matters more than usual when every generation call
- * costs money.
+ * Which sites' pages may call this API from a browser.
+ *
+ * **Production configuration, not a local-development convenience.** The web app
+ * is served from the site and calls this host directly rather than through
+ * CloudFront — the edge gives an origin sixty seconds and a map takes longer
+ * than that often enough to matter — so every call the website makes is
+ * cross-origin. With `ALLOWED_ORIGINS` unset the deployed app is refused every
+ * request, and the fallback below is only any use on a laptop.
+ *
+ * Defaulting to "*" instead would let any site on the internet drive this API,
+ * which matters more than usual when every generation call costs money.
  */
 function allowedOrigins(): string[] {
   const configured = process.env.ALLOWED_ORIGINS;
@@ -99,11 +107,39 @@ export function createApp(db: Db, options: AppOptions = {}): Hono {
       void task.catch((error: unknown) => console.error("background task failed", error));
     });
 
+  // Read once here as well as per request. A ceiling is only looked at when
+  // something generates, so a mistyped number would otherwise sit unnoticed
+  // through boot, the deploy's health check and every login, and surface as a
+  // 500 on the first card somebody wrote. Failing at construction makes it the
+  // deploy's problem instead, with Zod naming the variable.
+  getLimits();
+
   const origins = allowedOrigins();
-  app.use("*", cors({ origin: (origin) => (origins.includes(origin) ? origin : null) }));
+  app.use(
+    "*",
+    cors({
+      origin: (origin) => (origins.includes(origin) ? origin : null),
+      // Every call carries an Authorization header, which makes every one of
+      // them preflighted. Without a max-age the browser asks again before each
+      // request — two round trips to the other side of the world for every card
+      // — and Chrome's own cap is two hours, so this is the number it uses.
+      maxAge: 7200,
+    }),
+  );
   app.get("/health", (c) => c.json({ ok: true }));
 
   app.route("/api/auth", authRouter(db));
+
+  /**
+   * Public reads, addressed by username. Registered before the authenticated
+   * sub-app because that one is mounted on "/api" and its middleware would
+   * otherwise answer these with a 401.
+   *
+   * It is handed no provider, which is not an omission: nothing under here may
+   * generate, or reading somebody's map would spend their model budget. See
+   * public.ts for what is public and what is not.
+   */
+  app.route("/api/u", publicRouter(db, objects));
 
   const authed = new Hono<AuthEnv>();
   authed.use("*", requireAuth(db));

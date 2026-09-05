@@ -27,7 +27,7 @@ const settings = {
 describe("narrationKey", () => {
   it("lays the bucket out by the slugs the URLs are laid out by", () => {
     const key = narrationKey({
-      userSlug: "robin",
+      username: "robin",
       topicSlug: "kubernetes",
       nodePath: "scheduling/taints",
       voice: NarrationVoice.Erinome,
@@ -46,14 +46,14 @@ describe("narrationKey", () => {
       depth: 2,
       variant: "v",
     };
-    expect(narrationKey({ ...shared, userSlug: "robin" })).not.toBe(
-      narrationKey({ ...shared, userSlug: "robin-2" }),
+    expect(narrationKey({ ...shared, username: "robin" })).not.toBe(
+      narrationKey({ ...shared, username: "robin-2" }),
     );
   });
 
   it("names the card in the file, so two settings never share one recording", () => {
     const shared = {
-      userSlug: "robin",
+      username: "robin",
       topicSlug: "kubernetes",
       nodePath: "pods",
       voice: NarrationVoice.Erinome,
@@ -73,7 +73,7 @@ describe("narrationKey", () => {
 
   it("is stable for the same card, so a recording overwrites its own object", () => {
     const input = {
-      userSlug: "robin",
+      username: "robin",
       topicSlug: "k8s",
       nodePath: "pods",
       voice: NarrationVoice.Erinome,
@@ -85,7 +85,7 @@ describe("narrationKey", () => {
 
   it("carries the narration revision, which is what retires every recording", () => {
     const key = narrationKey({
-      userSlug: "robin",
+      username: "robin",
       topicSlug: "k8s",
       nodePath: "pods",
       voice: NarrationVoice.Erinome,
@@ -100,7 +100,7 @@ describe("narrationKey", () => {
     // only while its key still matches the one built here, so the recordings a
     // topic already has stop matching and the next press records them again.
     const shared = {
-      userSlug: "robin",
+      username: "robin",
       topicSlug: "k8s",
       nodePath: "pods",
       depth: 2,
@@ -113,7 +113,7 @@ describe("narrationKey", () => {
 
   it("writes a key with nothing in it that needs escaping", () => {
     const key = narrationKey({
-      userSlug: "robin",
+      username: "robin",
       topicSlug: "k8s",
       nodePath: "scheduling/taints",
       // The longest name in the set: nothing in it needs escaping either.

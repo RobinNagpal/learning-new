@@ -15,6 +15,17 @@ export const Slug = z
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "a slug is lower-case words joined by hyphens");
 
 /**
+ * A learner's name, and the one part of an address somebody types from memory.
+ *
+ * The same shape as a slug because it is one: allocated from the email at
+ * registration (`emailSlug` then `uniqueSlug` below), and never changed —
+ * it is the top folder of every recording the account owns, and changing it
+ * orphans all of them. It is also what a public URL is addressed by, so the
+ * reserved list matters here as much as it does for a node.
+ */
+export const Username = Slug;
+
+/**
  * The whole ancestor chain, slugs joined by "/". This is what a URL carries and
  * what the database indexes: a path is unique inside its topic, which — because
  * siblings share a parent path — is the same statement as "a slug is unique
@@ -29,6 +40,7 @@ export const NodePath = z
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)*$/, "a path is slugs joined by /");
 
 export type SlugT = z.infer<typeof Slug>;
+export type UsernameT = z.infer<typeof Username>;
 export type NodePathT = z.infer<typeof NodePath>;
 
 /**

@@ -87,6 +87,46 @@ export const EnvSchema = z.object({
 export type EnvT = z.infer<typeof EnvSchema>;
 
 /**
+ * The generation ceilings, and every one of them is off unless the deployment
+ * names it.
+ *
+ * They used to be constants in topics.ts, which made "the model bill has a
+ * ceiling" and "a learner can be told no" the same decision — and the second one
+ * is the one that bites: a build cut off by CloudFront at 60s runs to
+ * completion on the server, so a handful of retries after a timeout had spent
+ * the hour's nodes and the next press was refused for a map the learner never
+ * got. Unset is therefore no ceiling at all, and a deployment that wants one
+ * sets the number.
+ *
+ * Every one is optional and none has a default: the value is a repository
+ * variable, and an unset variable reaches the box as an empty line rather than
+ * as no line (see unsetWhenEmpty above). A value that is not a whole number
+ * fails the parse rather than being read as "off" — a ceiling somebody meant to
+ * set and mistyped must not be a ceiling that silently is not there.
+ */
+export const LimitsSchema = z.object({
+  MAX_TOPICS_PER_HOUR: unsetWhenEmpty(z.coerce.number().int().nonnegative().optional()),
+  MAX_TOPICS_PER_USER: unsetWhenEmpty(z.coerce.number().int().nonnegative().optional()),
+  MAX_GENERATED_NODES_PER_HOUR: unsetWhenEmpty(z.coerce.number().int().nonnegative().optional()),
+  MAX_MAP_PLANS_PER_HOUR: unsetWhenEmpty(z.coerce.number().int().nonnegative().optional()),
+  MAX_CARDS_WRITTEN_PER_HOUR: unsetWhenEmpty(z.coerce.number().int().nonnegative().optional()),
+  MAX_QUESTIONS_PER_HOUR: unsetWhenEmpty(z.coerce.number().int().nonnegative().optional()),
+  MAX_NARRATIONS_PER_HOUR: unsetWhenEmpty(z.coerce.number().int().nonnegative().optional()),
+});
+
+export type LimitsT = z.infer<typeof LimitsSchema>;
+
+/**
+ * Parsed on every call rather than memoised like getEnv below. It is seven
+ * coercions in front of a check that is about to run a database count, and the
+ * copy a lazy singleton would hold is one written before any test could set a
+ * ceiling to prove it still refuses.
+ */
+export function getLimits(): LimitsT {
+  return LimitsSchema.parse(process.env);
+}
+
+/**
  * The model each job runs on. One place, so a new task cannot silently pick one
  * — and a switch rather than a ternary, so adding a member to LlmTask fails the
  * build here rather than quietly running on the content model.

@@ -59,11 +59,20 @@ export function MapShapeFields({
   onShape,
   instructions,
   onInstructions,
+  instructionsEdited,
+  onInstructionsEdited,
 }: {
   shape: MapShapeT;
   onShape: (shape: MapShapeT) => void;
   instructions: string;
   onInstructions: (instructions: string) => void;
+  /**
+   * Whether the lines below were written by the learner rather than seeded.
+   * Both optional, for the caller that keeps its fields for as long as the
+   * screen is open and has nothing to remember — see SeededInstructions.
+   */
+  instructionsEdited?: boolean;
+  onInstructionsEdited?: () => void;
 }): ReactElement {
   const seed = useSeedMapInstructions();
   const set = (patch: Partial<MapShapeT>): void => onShape({ ...shape, ...patch });
@@ -134,6 +143,8 @@ export function MapShapeFields({
         seed={(next, onSeeded) => seed.mutate(next, { onSuccess: onSeeded })}
         value={instructions}
         onChange={onInstructions}
+        edited={instructionsEdited}
+        onEdited={onInstructionsEdited}
         label="What the map will be built to"
         hint="These are the words the model is given. Change any of them."
         maxLength={MAP_INSTRUCTIONS_MAX}

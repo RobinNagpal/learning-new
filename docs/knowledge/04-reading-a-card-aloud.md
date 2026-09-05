@@ -140,7 +140,7 @@ name is the recording's identity — revision, voice, depth, card variant — so
 card re-recorded in the same voice at the same settings **overwrites its own
 object**, and any of the four changing gets its own.
 
-`users.slug` is allocated at registration from the address and never changed —
+`users.username` is allocated at registration from the address and never changed —
 changing it orphans everything already recorded. See doc 5.
 
 `NARRATION_PROMPT_REVISION` travels in the key, and the row stores the key it was
@@ -279,9 +279,10 @@ be retryable without limit against a counter that could never grow. Each claim
 increments `attempts`, and the budget sums those over rows claimed inside the
 hour.
 
-CloudFront's 60s origin read timeout used to be the limit here, and is why the
-press and the run are now separate: nothing holds a request open for a
-generation any more.
+CloudFront's 60s origin read timeout is why the press and the run are separate:
+nothing holds a request open for a generation any more. The app no longer calls
+the API through the edge at all (doc 7), but minutes of synthesis would outlast
+any request deadline worth having.
 
 **Nothing deletes an object.** A re-recording overwrites its own key, but a
 deleted node, a rebuilt map and a bumped revision all leave objects behind. There

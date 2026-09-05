@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CardDepth } from "./cards";
 import { Id } from "./ids";
+import { Username } from "./slugs";
 
 export const Email = z
   .string()
@@ -27,6 +28,12 @@ export const LoginInput = z.object({ email: Email, password: z.string().min(1) }
 export const User = z.object({
   id: Id,
   email: Email,
+  /**
+   * How this learner is addressed in public. Allocated from the email at
+   * registration and never changed; every public read is under it, and the
+   * account's recordings are in a bucket folder named after it.
+   */
+  username: Username,
   /**
    * Where this learner's cards start — on the user rather than the topic,
    * because depth follows the person across every subject. Answered back so the

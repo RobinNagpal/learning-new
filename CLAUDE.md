@@ -18,7 +18,7 @@ learner sees, what happens when they use it, and which files to open.
 | [2. Cards and writing settings](docs/knowledge/02-cards-and-writing-settings.md) | The concept card, its slots, the cache, the controls under it, questions asked on it |
 | [3. Drills, progress and review](docs/knowledge/03-drills-progress-and-review.md) | The status ladder, grading, spaced review, study sessions |
 | [4. Reading a card aloud](docs/knowledge/04-reading-a-card-aloud.md) | The play button, narration scripts, the voice a topic is read in, speech synthesis, the audio bucket |
-| [5. Accounts, ownership and budgets](docs/knowledge/05-accounts-ownership-and-budgets.md) | Registration, sessions, the authorisation model, every generation ceiling |
+| [5. Accounts, ownership and budgets](docs/knowledge/05-accounts-ownership-and-budgets.md) | Registration, sessions, usernames, what is public and what is not, every generation ceiling |
 | [6. LLM providers and prompts](docs/knowledge/06-llm-providers-and-prompts.md) | Which model answers which call, structured generation, the prompt files |
 | [7. The app shell and caching](docs/knowledge/07-the-app-shell-and-caching.md) | Routing, the query cache and what is persisted, the component set |
 
@@ -198,11 +198,33 @@ can write over the lines, so every setting says itself in `content-rules.md` as 
 
 ## Accounts and sessions
 
-**There are no roles.** Every user sees only their own rows, there is no admin, and
-nothing is shared between accounts — so authorisation is ownership, checked by scoping
-each query to `c.get("userId")`. A query that forgets the scope is a data leak, not a
-missing feature. This is the whole of the model; do not add a role column without a
-reason that survives that sentence.
+**There are no roles, and there are two kinds of route.** Every *write* is ownership,
+checked by scoping the query to `c.get("userId")`: a write that forgets the scope is a
+data leak, not a missing feature. Every *read* of generated content is public, addressed
+by the owner's username under `/api/u/:username` (`src/public.ts`). There is no admin and
+no sharing model between accounts; do not add a role column without a reason that
+survives that sentence.
+
+**What was generated is public; what the learner did with it is not.** The map, the
+seven answers it was built from, the settings and instruction lines it was written to,
+the cards, the drills and the questions asked on a card are model output somebody paid
+for once. Which nodes they have finished, what is due for review, where they left off and
+their profile are the record of a person studying, and stay theirs. `PublicNode` is
+`LearningNode` without `status`, so a public route cannot leak one and still compile —
+that is the line, and it is held by the type rather than by care.
+
+Two properties of the public router make it safe to leave open, and both are structural
+rather than promised: it is handed **no LLM provider**, so a stranger walking somebody's
+map cannot spend their model budget — a card that has never been written answers 404
+rather than being written on the spot — and it **writes nothing**, so reading a card does
+not mark it seen for its owner. Both are why these are their own routes rather than the
+authenticated ones with the ownership check taken off: those generate on a miss.
+
+**A username is what a learner is addressed by**, and it is the old `users.slug` grown a
+second job. It is allocated once at registration from the email (`emailSlug` then
+`uniqueSlug`), never changed — the audio bucket is laid out by it, so a new one orphans
+every recording — and it is unique. Nothing lists usernames: a name is something you are
+given, not something to walk.
 
 Identity is email + password, in `src/auth.ts` and `src/password.ts`:
 
@@ -319,9 +341,15 @@ the folder next to `index.js`, the same as the Prisma engine, and fails the buil
 if it did not land.
 
 **Generation is the only expensive call, and registration is open.** Every path that
-reaches the model is inside a per-user budget (`assertWithinBudget` in `topics.ts`).
-Adding a new generating endpoint means adding it there too, or the deployment's model
-bill has no ceiling. Note what it counts: rebuilding a map or one group creates no
+reaches the model is inside a per-user ceiling (`assertWithinBudget` in `topics.ts`),
+and **every ceiling is off unless the deployment names it** — `LimitsSchema` in
+`env.ts`, one repository variable per ceiling, where unset is no ceiling and costs no
+query. They are off because a map is built inside the request and CloudFront gives up on
+the origin at 60s while the server finishes anyway: two retries after a timeout spent
+the hour's nodes on maps nobody saw, and the ceiling then refused the one person it was
+not protecting anything from. Who else can register is a deployment's decision rather
+than a constant. Adding a new generating endpoint still means wiring it into one of
+them, or it is an endpoint no deployment can put a ceiling on. Note what each counts: rebuilding a map or one group creates no
 topic, so a topic count alone would leave every rebuild outside the budget entirely —
 nodes generated in the last hour is the limit that actually binds. The seven choices
 need a third counter for the same reason in reverse: they are generated *before* any
@@ -374,6 +402,16 @@ with four options each, the learner picks, and the picks go into `mapPrompt`.
   right. *recap* then asks how much of what goes still gets a mention. They replaced
   questions about code and about numbers, which asked how content is written when the
   content settings already decide that.
+- **Nothing between the form and the map is component state.** The three answers, the
+  shape, the lines, the questions, the picks and the topic a failed build left behind are
+  one draft (`apps/mobile/lib/mapDraft.ts`), written to disk. Building is half a minute
+  of model call that CloudFront abandons at 60s and that the model can fail outright, and
+  every one of those used to land on a sheet whose state went with it — so the way out
+  was answering seven questions again for a map already asked for. The draft is what the
+  review screen (`app/topic/new/review.tsx`) is made of: every answer on one page, each
+  changed in place, the build button under them, and a failure landing there with
+  everything still in it. A retry after a failure rebuilds the topic that build left
+  behind (`topicSlug` on `ApiError`) rather than creating a second one.
 - **A full rebuild asks them again**; a group rebuild does not. The questions are about
   the shape of the whole map, and a group rebuild leaves the rest of it alone. The one
   exception is the retry after a failed build, which falls back to the plan already
@@ -509,10 +547,10 @@ by tests.
   it has and records again on the next press. `card_narrations.voice` stays a plain
   string, because it says which voice made a recording that already exists and that may
   be one the enum has since dropped.
-- **The bucket is laid out by slug, and the key is the recording's identity.**
-  `narrationKey` builds `<user>/<topic>/<node path>/n<rev>-<voice>-d<depth>-<variant>.wav`,
+- **The bucket is laid out by username, and the key is the recording's identity.**
+  `narrationKey` builds `<username>/<topic>/<node path>/n<rev>-<voice>-d<depth>-<variant>.wav`,
   so a card re-recorded in the same voice at the same settings overwrites its own object
-  and any of the four changing gets its own. `users.slug` is allocated at registration from the address —
+  and any of the four changing gets its own. `users.username` is allocated at registration from the address —
   `emailSlug` then `uniqueSlug`, because two accounts at two providers can hold the same
   local part and their folders must not be the same folder — and never changed, because
   changing it orphans everything already recorded. It rides on the session beside
@@ -808,9 +846,15 @@ restarts the API. There is no staging environment — `main` is production.
 
 **The API is a process, not a Lambda.** It runs as the `interestled-api` systemd unit
 on port **7072** of a Lightsail instance **shared with courtpot**, which runs on 7071.
-Caddy on that box terminates TLS for `api.interestled.com` and proxies to 7072;
-CloudFront serves `/api/*` from there and everything else from S3, so production is
-same-origin and CORS exists only for local development.
+Caddy on that box terminates TLS for `api.interestled.com` and proxies to 7072, and
+**both builds call that host directly rather than through CloudFront**. The edge gives
+an origin 60 seconds, which is its ceiling without a quota increase, and a map takes
+longer than that often enough to matter — the 504 then lands on a learner while the
+server finishes the map anyway. Nothing under `/api` was cacheable, so the edge was
+contributing a deadline and nothing else. The distribution's `/api/*` route stays where
+it is for the APKs that baked the site in, and `ALLOWED_ORIGINS` is now production
+configuration rather than a local-development convenience: unset, the deployed website
+is refused every call.
 
 That the host is shared is the thing to remember when changing anything runtime-shaped:
 
@@ -819,9 +863,8 @@ That the host is shared is the thing to remember when changing anything runtime-
   a runaway generation loop is a two-application outage.
 - **The process is long-lived.** No cold start to design around, but also no fresh
   container to tidy up after a leak, and no Lambda function timeout killing a runaway
-  call at 120s. The practical ceiling on a slow generation is now CloudFront's 60s
-  origin read timeout — Caddy adds none, and Node's own 5-minute request timeout is
-  far above it.
+  call at 120s. With the edge out of the path the practical ceiling on a slow generation
+  is Node's own 5-minute request timeout — Caddy adds none of its own.
 - The bundle stays **CommonJS** and ships the `debian-openssl-3.0.x` Prisma engine
   beside it, because the generated client requires its engine at runtime from its own
   directory. A top-level `await` in `src/index.ts` would force ESM and break that.

@@ -158,7 +158,7 @@ export function seedContentInstructions(paragraphLength: ParagraphLength): strin
 type WritingSettings = Omit<TopicContentSettingsT, "narrationVoice">;
 
 /** The stored value, or the seed when the learner has not overridden it. */
-function effectiveContentInstructions(content: WritingSettings): string {
+export function effectiveContentInstructions(content: WritingSettings): string {
   return content.contentInstructions.trim() === ""
     ? seedContentInstructions(content.paragraphLength)
     : content.contentInstructions.trim();

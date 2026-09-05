@@ -33,7 +33,7 @@ const AUDIO_CONTENT_TYPE = "audio/wav";
 export interface NarrationTarget {
   userId: string;
   /** Off the session, not looked up: it never changes and it is already loaded. */
-  userSlug: string;
+  username: string;
   topic: TopicT;
   node: LearningNodeT;
   /**
@@ -84,7 +84,7 @@ async function cardBeingRead(
  */
 function keyFor(target: NarrationTarget): string {
   return narrationKey({
-    userSlug: target.userSlug,
+    username: target.username,
     topicSlug: target.topic.slug,
     nodePath: target.node.path,
     voice: target.topic.narrationVoice,

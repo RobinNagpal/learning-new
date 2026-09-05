@@ -22,6 +22,8 @@ export function SeededInstructions<TInput>({
   seed,
   value,
   onChange,
+  edited: editedAlready,
+  onEdited,
   label,
   hint,
   maxLength,
@@ -31,6 +33,16 @@ export function SeededInstructions<TInput>({
   seed: (input: TInput, onSeeded: (text: string) => void) => void;
   value: string;
   onChange: (text: string) => void;
+  /**
+   * Whether the learner has already written in here, for a caller that outlives
+   * this component. Guessing it from the box being non-empty is right the first
+   * time and wrong every time after: the seed fills the box too, so a screen
+   * remounted with a draft in it would read its own seed as somebody's writing
+   * and never re-seed again. Where nothing remembers, the guess still applies.
+   */
+  edited?: boolean;
+  /** Told the first time they type, so the caller can remember it. */
+  onEdited?: () => void;
   label: string;
   hint: string;
   maxLength: number;
@@ -38,23 +50,27 @@ export function SeededInstructions<TInput>({
   const seeded = useSeededText(input, seed);
   // Whether the learner has typed in here. Once true the settings never write to
   // it again — they can only say the things somebody thought to make a setting
-  // for, and whatever was written instead is worth more than the seed.
-  const edited = useRef(value.trim() !== "");
+  // for, and whatever was written instead is worth more than the seed. The ref
+  // is the guess, for a caller that keeps no such fact; a caller that does is
+  // believed both ways, so a draft started over seeds again.
+  const typed = useRef(value.trim() !== "");
+  const edited = editedAlready ?? typed.current;
 
   useEffect(() => {
-    if (!edited.current && seeded !== "") {
+    if (!edited && seeded !== "") {
       onChange(seeded);
     }
-    // On the seed alone: onChange is a new function every render, and depending
-    // on it would write back on every keystroke.
-  }, [seeded]);
+    // On the seed and that flag: onChange is a new function every render, and
+    // depending on it would write back on every keystroke.
+  }, [seeded, edited]);
 
   return (
     <Input
       label={label}
       value={value}
       onChangeText={(text) => {
-        edited.current = true;
+        typed.current = true;
+        onEdited?.();
         onChange(text);
       }}
       multiline

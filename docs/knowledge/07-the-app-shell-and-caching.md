@@ -13,7 +13,8 @@ straight into it.
 index.tsx                        the topics list
 profile.tsx                      the optional profile
 review.tsx                       the three-item review batch
-topic/new.tsx                    the create form and the seven questions
+topic/new/index.tsx              the create form and the seven questions
+topic/new/review.tsx             everything the map will be built from, and the button
 topic/[topic]/index.tsx          the map
 topic/[topic]/[...path].tsx      a heading, a card, or a drill
 topic/[topic]/edit/index.tsx     what the map holds
@@ -76,8 +77,23 @@ the surface stays visible. **Every response is parsed by a Zod schema from
 `packages/schemas`** — an unrecognised value fails loudly at the boundary rather
 than flowing through the app.
 
-`ApiError` carries the status. A `401` calls `onUnauthorized`, which drops a
-session the server has forgotten.
+**The app calls `api.interestled.com` directly, not the site.** `API_URL` comes from
+`EXPO_PUBLIC_API_URL`, baked in at build time by both workflows. CloudFront gives an
+origin sixty seconds and a map generation takes longer than that often enough to
+matter, so the edge was turning a working build into a 504 while the server finished
+it; nothing under `/api` was cacheable, so it was contributing a deadline and nothing
+else. Two consequences: every call the website makes is cross-origin, so the API's
+`ALLOWED_ORIGINS` is production configuration (`apps/server/src/app.ts`), and the
+site's own `/api/*` route has to keep working for APKs that baked it in.
+
+**Every call the app makes is authenticated.** There is a second, public half of
+the API — `/api/u/:username/...`, reads of generated content by anyone — which
+nothing in the app calls yet; it is documented in doc 5.
+
+`ApiError` carries the status, and — on a build that failed — the slug of the
+topic it left behind, so a retry rebuilds that topic rather than creating a
+second one (doc 1). A `401` calls `onUnauthorized`, which drops a session the
+server has forgotten.
 
 ## The cache
 
@@ -128,10 +144,15 @@ Two rules:
   Moving the version discards the persisted cache on the next launch — the same
   idea as `CARD_PROMPT_REVISION`.
 
+One thing on disk is not the query cache at all: the map being set up but not yet
+built (`interestled.mapDraft`, written by `lib/mapDraft.ts`). It is there because
+a build is a slow model call that can fail, and everything answered on the way to
+it must survive that — doc 1 has the rest.
+
 A sign-in starts from an empty cache and a sign-out empties the disk too:
-`clearSession` calls `removeClient` on the persister rather than waiting for the
-throttled write, and `adopt` clears before it stores the token, so a sign-out cut
-off early never hands the next person the last one's map.
+`clearSession` calls `removeClient` on the persister and clears the draft rather
+than waiting for either throttled write, and `adopt` clears before it stores the
+token, so a sign-out cut off early never hands the next person the last one's map.
 
 ## The component set
 

@@ -89,7 +89,7 @@ export type NarrationScriptT = z.infer<typeof NarrationScript>;
  * told apart.
  */
 export function narrationKey(input: {
-  userSlug: string;
+  username: string;
   topicSlug: string;
   nodePath: string;
   /** The topic's narration voice — what said it, and so part of what it is. */
@@ -104,7 +104,7 @@ export function narrationKey(input: {
     `d${input.depth}`,
     input.variant.split("|").join("-"),
   ].join("-");
-  return `${input.userSlug}/${input.topicSlug}/${input.nodePath}/${file}.wav`;
+  return `${input.username}/${input.topicSlug}/${input.nodePath}/${file}.wav`;
 }
 
 /**

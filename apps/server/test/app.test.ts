@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CardAngle,
   ContentFormat,
+  DrillKind,
   EnglishLevel,
   DEFAULT_AVERAGE_READ_TIME,
   LearningStyle,
@@ -10,6 +11,8 @@ import {
   MAP_QUESTION_KINDS,
   MapPlanView,
   MapQuestionKind,
+  PublicCard,
+  PublicTopicDetail,
   NARRATION_TIMED_OUT,
   NARRATION_TIMEOUT_MS,
   DEFAULT_NARRATION_VOICE,
@@ -30,6 +33,16 @@ import { GenerationError } from "../src/errors";
 import type { SpeechProvider } from "../src/llm/speech";
 import type { ObjectStore } from "../src/storage";
 import type { LlmProvider } from "../src/llm/types";
+
+/**
+ * Every generation ceiling is off unless the deployment names it, so a test
+ * that wants to prove one still refuses sets it here and this puts it back.
+ * Without the unstub the variable would leak into whatever ran next, and the
+ * test it broke would be one that never mentions limits.
+ */
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 /**
  * The auth boundary depends on registration order in app.ts: the public
@@ -61,15 +74,15 @@ function stubDb(
   const db = {
     user: {
       findUnique: vi.fn(async () => null),
-      // Registration allocates a slug, which means reading the ones already
+      // Registration allocates a username, which means reading the ones already
       // handed out that could collide with it.
       findMany: vi.fn(async () => []),
-      create: vi.fn(async ({ data }: { data: { slug: string } }) => ({
+      create: vi.fn(async ({ data }: { data: { username: string } }) => ({
         id: "u1",
         email: "a@b.com",
-        // Echoed back rather than fixed, so a test can assert what the folder
-        // this account's recordings go in was actually named.
-        slug: data.slug,
+        // Echoed back rather than fixed, so a test can assert what this account
+        // is addressed by — and what its recordings' folder is named.
+        username: data.username,
         // The column's own default, which the real row always carries: the
         // register response says where this learner's cards will start.
         defaultDepth: 2,
@@ -90,7 +103,7 @@ function stubDb(
               token: session.token,
               userId: session.userId,
               expiresAt: session.expiresAt ?? new Date(Date.now() + 60_000),
-              user: { id: session.userId, defaultDepth: 2, slug: "robin" },
+              user: { id: session.userId, defaultDepth: 2, username: "robin" },
             }
           : null,
       ),
@@ -120,6 +133,35 @@ describe("auth boundary", () => {
       body: JSON.stringify({ email: "new@example.com", password: "a long enough one" }),
     });
     expect(response.status).toBe(201);
+  });
+
+  it("names the new account and writes nothing to the column username replaced", async () => {
+    // `slug` still exists for one deploy and carries its own unique index. A
+    // row from the deploy gap holds a slug and a defaulted username, so writing
+    // both here would make every later registration of that same base collide
+    // on a constraint the retry does not recognise — and that address could
+    // then never register at all. The column has a default; leave it to it.
+    const db = stubDb(null);
+    const created = (db as unknown as { user: { create: ReturnType<typeof vi.fn> } }).user.create;
+    const response = await createApp(db, { provider }).request("/api/auth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "Robin.Nagpal@gmail.com", password: "a long enough one" }),
+    });
+
+    expect(response.status).toBe(201);
+    const data = created.mock.calls[0]?.[0] as { data: Record<string, unknown> };
+    expect(data.data.username).toBe("robin-nagpal");
+    expect(Object.keys(data.data)).not.toContain("slug");
+  });
+
+  it("refuses to start at all when a generation ceiling is not a number", async () => {
+    // Ceilings are read where they are checked, which is only ever inside a
+    // generating call — so a mistyped one would otherwise sit through boot, the
+    // deploy's health check and every login, and surface as a 500 on the first
+    // card somebody wrote.
+    vi.stubEnv("MAX_TOPICS_PER_HOUR", "ten");
+    expect(() => createApp(stubDb(null), { provider })).toThrow();
   });
 
   it("leaves health open, so the load balancer never needs a token", async () => {
@@ -211,6 +253,56 @@ function topicRow(): Record<string, unknown> {
  * the learner has already verified, which is the thing the edit screen exists to
  * avoid.
  */
+/**
+ * The website is served from the site and calls this API on its own host, so
+ * every request it makes is cross-origin. That makes CORS the thing standing
+ * between the deployed app and every call failing — and it fails in the browser
+ * rather than here, which is why it is pinned.
+ */
+describe("cross-origin calls from the website", () => {
+  const SITE = "https://interestled.com";
+
+  const preflight = async (origin: string): Promise<Response> =>
+    createApp(stubDb(null), { provider }).request("/api/topics", {
+      method: "OPTIONS",
+      headers: {
+        Origin: origin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type",
+      },
+    });
+
+  it("admits the site the deployment names, and says the preflight holds", async () => {
+    vi.stubEnv("ALLOWED_ORIGINS", SITE);
+    const response = await preflight(SITE);
+
+    expect(response.headers.get("access-control-allow-origin")).toBe(SITE);
+    // Every call carries an Authorization header, so every call is preflighted.
+    // With no max-age that is two round trips per card.
+    expect(Number(response.headers.get("access-control-max-age"))).toBeGreaterThan(0);
+    expect(response.headers.get("access-control-allow-headers")).toContain("authorization");
+  });
+
+  it("answers a signed-in call from that site with the header the browser needs", async () => {
+    vi.stubEnv("ALLOWED_ORIGINS", SITE);
+    const response = await createApp(stubDb({ token: "good", userId: "u1" }), {
+      provider,
+    }).request("/api/topics", { headers: { Authorization: "Bearer good", Origin: SITE } });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBe(SITE);
+  });
+
+  it("does not let any other page on the internet drive it", async () => {
+    // Every generation call costs money, and a bearer token in another site's
+    // page is not the thing stopping it — this is.
+    vi.stubEnv("ALLOWED_ORIGINS", SITE);
+    const response = await preflight("https://not-interestled.example");
+
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+  });
+});
+
 describe("topic settings writes", () => {
   function settingsDb(row = topicRow()): {
     db: Db;
@@ -229,7 +321,7 @@ describe("topic settings writes", () => {
           token: "good",
           userId: "u1",
           expiresAt: new Date(Date.now() + 60_000),
-          user: { id: "u1", defaultDepth: 2, slug: "robin" },
+          user: { id: "u1", defaultDepth: 2, username: "robin" },
         })),
         deleteMany: vi.fn(async () => ({ count: 0 })),
       },
@@ -866,9 +958,10 @@ describe("card generation", () => {
   });
 
   it("refuses a rewrite once the hour's card writing has hit its ceiling", async () => {
-    // Every other generating call either creates nodes or is answered from the
-    // cache the second time. This one costs a model call per press, so without
-    // a ceiling the deployment's bill has none.
+    // This one costs a model call per press, and every other generating call
+    // either creates nodes or is answered from the cache the second time — so
+    // it is the press a deployment that wants a ceiling puts one on.
+    vi.stubEnv("MAX_CARDS_WRITTEN_PER_HOUR", "60");
     const { db } = cardDb(mapRows(), "n2");
     const stub = db as unknown as { conceptCard: { count: ReturnType<typeof vi.fn> } };
     stub.conceptCard.count = vi.fn(async () => 60);
@@ -885,6 +978,7 @@ describe("card generation", () => {
   it("lets an ordinary read through at that same count, since only a rewrite is checked", async () => {
     // Reading is bounded by how many nodes there are, so refusing it would only
     // ever mean refusing to show the next node.
+    vi.stubEnv("MAX_CARDS_WRITTEN_PER_HOUR", "60");
     const { db } = cardDb(mapRows(), "n2");
     const stub = db as unknown as { conceptCard: { count: ReturnType<typeof vi.fn> } };
     stub.conceptCard.count = vi.fn(async () => 60);
@@ -1189,6 +1283,7 @@ describe("card questions", () => {
   });
 
   it("stops the sixty-first question in an hour", async () => {
+    vi.stubEnv("MAX_QUESTIONS_PER_HOUR", "60");
     const { db } = questionDb();
     const stub = db as unknown as { cardQuestion: { count: ReturnType<typeof vi.fn> } };
     stub.cardQuestion.count = vi.fn(async () => 60);
@@ -1579,10 +1674,29 @@ describe("map plans", () => {
     expect(topics).toEqual([]);
   });
 
+  it("builds a map whatever the hour already generated, since no ceiling is set", async () => {
+    // The ceilings are off unless a deployment names one, and the node count is
+    // the one that used to bite: a build cut off by CloudFront at 60s runs to
+    // completion on the server, so two or three retries after a timeout had
+    // spent the hour and the next press was refused for a map nobody ever got.
+    const { db } = planDb([]);
+    const stub = db as unknown as { learningNode: { count: ReturnType<typeof vi.fn> } };
+    stub.learningNode.count = vi.fn(async () => 4000);
+    const { provider } = recorder(MAP);
+
+    const built = await post(db, provider, "/api/topics", { title: "Kubernetes" });
+
+    expect(built.status).toBe(201);
+    // Nothing is counted either: an unset ceiling is one nothing can be refused
+    // for, so the query it would be compared against is never made.
+    expect(stub.learningNode.count).not.toHaveBeenCalled();
+  });
+
   it("stops a thirty-first set of questions, but never a build", async () => {
     // The plan cap exists to stop someone generating questions all day. If it
     // also gated the build, a learner who had just answered seven questions
     // would be told they could not have the map they answered them for.
+    vi.stubEnv("MAX_MAP_PLANS_PER_HOUR", "30");
     const spent: PlanRow[] = Array.from({ length: 30 }, (_, index) => ({
       id: `p${index}`,
       userId: "u1",
@@ -1688,7 +1802,7 @@ describe("reading a card out", () => {
 
   /** The key this learner's recording of that card belongs at. */
   const KEY = narrationKey({
-    userSlug: "robin",
+    username: "robin",
     topicSlug: "kubernetes",
     nodePath: "pods/restarts",
     voice: DEFAULT_NARRATION_VOICE,
@@ -1796,7 +1910,7 @@ describe("reading a card out", () => {
           expiresAt: new Date(Date.now() + 60_000),
           // The slug rides on the session, like the depth: it never changes,
           // and the alternative is a second query on every card view.
-          user: { id: "u1", defaultDepth: 2, slug: "robin" },
+          user: { id: "u1", defaultDepth: 2, username: "robin" },
         })),
       },
       learningNode: {
@@ -2083,7 +2197,10 @@ describe("reading a card out", () => {
 
   it("answers that press even at the ceiling, since it costs nothing", async () => {
     // The budget is about what a press would spend. Refusing one that would
-    // have been served from the bucket turns a retry into a dead end.
+    // have been served from the bucket turns a retry into a dead end. The
+    // ceiling has to be named, or this passes for the wrong reason — there is
+    // none set by default, and the check it is about would never run.
+    vi.stubEnv("MAX_NARRATIONS_PER_HOUR", "20");
     const stub = audioStub({ narration: {}, recent: 20 });
     expect((await post(stub)).status).toBe(200);
   });
@@ -2219,6 +2336,8 @@ describe("reading a card out", () => {
   it("counts every run against the ceiling, not every card", async () => {
     // One row per card, so a card that fails on every press would be retryable
     // without limit if the budget counted rows. Each retry is two model calls.
+    // Only checked where there is a ceiling to check against, so this names one.
+    vi.stubEnv("MAX_NARRATIONS_PER_HOUR", "20");
     const stub = audioStub({ narration: { status: NarrationStatus.Failed, error: "It broke." } });
     await post(stub);
     await stub.settle();
@@ -2314,6 +2433,7 @@ describe("reading a card out", () => {
   });
 
   it("refuses once the hour's recordings have hit the ceiling", async () => {
+    vi.stubEnv("MAX_NARRATIONS_PER_HOUR", "20");
     const stub = audioStub({ narration: null, recent: 20 });
     const response = await post(stub);
 
@@ -2350,5 +2470,284 @@ describe("reading a card out", () => {
     expect(response.status).toBe(502);
     expect(await response.json()).toMatchObject({ error: expect.stringContaining("AUDIO_BUCKET") });
     expect(stub.row()).toBeNull();
+  });
+});
+
+/**
+ * Reading somebody's work without being anybody.
+ *
+ * The line these pin is the one the product now rests on: **what was generated
+ * is public, and what the learner did with it is not.** Everything a model
+ * wrote — the map, the answers it was built from, the cards, the drills, the
+ * questions asked on one — is readable by anyone with the username. Statuses,
+ * progress, the resume point and the profile are not, and no route here can
+ * spend the owner's model budget.
+ */
+describe("public reads", () => {
+  const PLAN_QUESTIONS = MAP_QUESTION_KINDS.map((kind) => ({
+    kind,
+    question: `A question about ${kind}?`,
+    options: [0, 1, 2, 3].map((index) => ({
+      label: `Option ${index}`,
+      sample: [`A sample line for ${kind} ${index}`],
+    })),
+  }));
+
+  /** The settings the stored card below was written to. */
+  const written = {
+    depth: 2,
+    minutes: 3,
+    englishLevel: EnglishLevel.Medium,
+    technicalDetail: TechnicalDetail.Medium,
+    format: ContentFormat.Prose,
+    paragraphLength: ParagraphLength.Medium,
+    angle: CardAngle.Base,
+    instructions: "",
+  };
+
+  const CARD_CONTENT = {
+    claim: "A pod is the unit of scheduling.",
+    mechanism: [{ heading: "What schedules a pod", body: "The scheduler places pods." }],
+    jargon: [],
+  };
+
+  function nodeRows(): Record<string, unknown>[] {
+    const base = {
+      topicId: "t1",
+      archetype: TopicArchetype.Tool,
+      capability: "do it",
+      cardInstructions: "",
+      createdAt: new Date(),
+      prerequisites: [],
+    };
+    return [
+      {
+        ...base,
+        id: "g1",
+        parentId: null,
+        path: "pods",
+        title: "Pods",
+        claim: "c",
+        minutes: 0,
+        orderIndex: 0,
+        // The learner is part way through. None of this may reach a reader.
+        status: NodeStatus.Verified,
+      },
+      {
+        ...base,
+        id: "n1",
+        parentId: "g1",
+        path: "pods/restarts",
+        title: "Restarts",
+        claim: "c",
+        minutes: 3,
+        orderIndex: 1,
+        status: NodeStatus.Shaky,
+      },
+    ];
+  }
+
+  function publicDb(options: { card?: boolean; drill?: boolean } = {}): {
+    db: Db;
+    writes: string[];
+  } {
+    // Anything that would change a row or spend a model call lands here, so a
+    // test can say "reading this cost the owner nothing" and mean it.
+    const writes: string[] = [];
+    const record = (what: string) => async () => {
+      writes.push(what);
+      return { count: 0 };
+    };
+    const db = {
+      user: {
+        findUnique: vi.fn(async ({ where }: { where: { username: string } }) =>
+          where.username === "robin" ? { id: "u1", username: "robin" } : null,
+        ),
+        update: vi.fn(record("user.update")),
+      },
+      topic: {
+        findMany: vi.fn(async ({ where }: { where: { userId: string } }) =>
+          where.userId === "u1" ? [topicRow()] : [],
+        ),
+        findFirst: vi.fn(async ({ where }: { where: { userId: string; slug: string } }) =>
+          where.userId === "u1" && where.slug === "kubernetes" ? topicRow() : null,
+        ),
+      },
+      learningNode: {
+        findMany: vi.fn(async () => nodeRows()),
+        findFirst: vi.fn(async ({ where }: { where: { id: string } }) => {
+          const row = nodeRows().find((candidate) => candidate.id === where.id);
+          return row === undefined ? null : { ...row, topic: topicRow() };
+        }),
+        update: vi.fn(record("learningNode.update")),
+        count: vi.fn(async () => 0),
+      },
+      mapPlan: {
+        findMany: vi.fn(async () => [
+          {
+            id: "p1",
+            questions: PLAN_QUESTIONS,
+            answers: [{ kind: MapQuestionKind.Outline, optionIndexes: [1] }],
+            createdAt: new Date(),
+          },
+        ]),
+      },
+      conceptCard: {
+        findFirst: vi.fn(async () =>
+          options.card === true
+            ? {
+                depth: written.depth,
+                variant: cardVariant(written),
+                instructions: "",
+                content: CARD_CONTENT,
+                createdAt: new Date(),
+              }
+            : null,
+        ),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(record("conceptCard.upsert")),
+        count: vi.fn(async () => 0),
+      },
+      drill: {
+        findFirst: vi.fn(async () =>
+          options.drill === true
+            ? {
+                id: "d1",
+                nodeId: "n1",
+                kind: DrillKind.Apply,
+                prompt: "Do the thing",
+                completionTest: "It restarts",
+                referencePoints: ["the probe fails"],
+                hints: [],
+                createdAt: new Date(),
+              }
+            : null,
+        ),
+        create: vi.fn(record("drill.create")),
+      },
+      cardQuestion: {
+        findMany: vi.fn(async () => [
+          { id: "q1", nodeId: "n1", question: "Why?", answer: "Because.", createdAt: new Date() },
+        ]),
+      },
+      cardNarration: { findUnique: vi.fn(async () => null) },
+      authSession: { findUnique: vi.fn(async () => null) },
+    };
+    return { db: db as unknown as Db, writes };
+  }
+
+  /**
+   * A provider that fails the test if it is ever reached. The public router is
+   * handed none at all, so this is really a guard on the wiring: a public read
+   * that generated would be a stranger spending the owner's model budget.
+   */
+  const noGeneration = (): ((task: LlmTask) => LlmProvider) => () => {
+    throw new Error("a public read generated something");
+  };
+
+  const get = async (db: Db, path: string): Promise<Response> =>
+    createApp(db, { provider: noGeneration() }).request(path);
+
+  it("lists a learner's topics to nobody in particular", async () => {
+    const { db } = publicDb();
+    const response = await get(db, "/api/u/robin/topics");
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { title: string; userId?: string }[];
+    expect(body[0]?.title).toBe("Kubernetes");
+    // The owner's id says nothing a reader can use and is not theirs to have.
+    expect(body[0]?.userId).toBeUndefined();
+  });
+
+  it("answers a username nobody holds with a 404, and lists no usernames anywhere", async () => {
+    const { db } = publicDb();
+    expect((await get(db, "/api/u/nobody/topics")).status).toBe(404);
+    // There is no route above the username: a name is something you are told.
+    expect((await get(db, "/api/u")).status).toBe(404);
+  });
+
+  it("serves the map and everything it was built from, and no progress at all", async () => {
+    const { db } = publicDb();
+    const response = await get(db, "/api/u/robin/topics/kubernetes");
+
+    expect(response.status).toBe(200);
+    // Parsed rather than read loosely: the schema is the contract, and it is
+    // what has no field for a status.
+    const body = PublicTopicDetail.parse(await response.json());
+    expect(body.nodes.map((node) => node.title)).toEqual(["Pods", "Restarts"]);
+    expect(body.plan?.questions).toHaveLength(MAP_QUESTION_KINDS.length);
+    expect(body.plan?.answers[0]?.optionIndexes).toEqual([1]);
+    // The lines the model was actually given, not the "" that stands for them.
+    expect(body.instructions.map).toContain("7 main headings");
+    expect(body.instructions.content).not.toBe("");
+
+    const raw = JSON.parse(JSON.stringify(body)) as Record<string, unknown>;
+    expect(raw.progress).toBeUndefined();
+    expect(raw.resume).toBeUndefined();
+    for (const node of body.nodes) {
+      expect(Object.keys(node)).not.toContain("status");
+    }
+  });
+
+  it("serves a card that exists, and marks nothing seen by doing it", async () => {
+    const { db, writes } = publicDb({ card: true });
+    const response = await get(db, "/api/u/robin/nodes/n1/card");
+
+    expect(response.status).toBe(200);
+    const body = PublicCard.parse(await response.json());
+    expect(body.content.claim).toBe(CARD_CONTENT.claim);
+    // What it was written to, which is half of "how this was generated".
+    expect(body.settings.depth).toBe(written.depth);
+    // Reading somebody's card is not studying it: no status moves, no depth is
+    // remembered, and nothing at all is written.
+    expect(writes).toEqual([]);
+  });
+
+  it("refuses a card nobody has written rather than writing one", async () => {
+    // The point of the whole router: a visitor walking a map must not be able
+    // to spend its owner's model budget a node at a time.
+    const { db, writes } = publicDb({ card: false });
+    const response = await get(db, "/api/u/robin/nodes/n1/card");
+
+    expect(response.status).toBe(404);
+    expect(writes).toEqual([]);
+  });
+
+  it("serves a drill that exists and refuses to write one that does not", async () => {
+    const { db: withDrill } = publicDb({ drill: true });
+    const found = await get(withDrill, "/api/u/robin/nodes/n1/drill?kind=apply");
+    expect(found.status).toBe(200);
+    expect(((await found.json()) as { drill: { prompt: string } }).drill.prompt).toBe("Do the thing");
+
+    const { db: without, writes } = publicDb({ drill: false });
+    expect((await get(without, "/api/u/robin/nodes/n1/drill?kind=apply")).status).toBe(404);
+    expect(writes).toEqual([]);
+  });
+
+  it("serves the questions asked on a card, which are content like the rest", async () => {
+    const { db } = publicDb();
+    const response = await get(db, "/api/u/robin/nodes/n1/questions");
+    expect(response.status).toBe(200);
+    expect((await response.json()) as unknown[]).toHaveLength(1);
+  });
+
+  it("will not answer for a node under a username that does not own it", async () => {
+    // The id alone would find the row. Scoping to the name as well is what makes
+    // a public URL actually about the person it names.
+    const { db } = publicDb();
+    (db as unknown as { user: { findUnique: ReturnType<typeof vi.fn> } }).user.findUnique = vi.fn(
+      async () => ({ id: "u2", username: "someone-else" }),
+    );
+    expect((await get(db, "/api/u/someone-else/nodes/n1/card")).status).toBe(404);
+  });
+
+  it("leaves every write where it was, behind a token", async () => {
+    const { db } = publicDb();
+    const app = createApp(db, { provider: noGeneration() });
+    // Nothing under the public prefix answers anything but a GET…
+    const posted = await app.request("/api/u/robin/topics", { method: "POST" });
+    expect(posted.status).toBe(404);
+    // …and the authenticated routes are untouched by any of this.
+    expect((await app.request("/api/topics")).status).toBe(401);
   });
 });

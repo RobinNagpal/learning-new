@@ -281,6 +281,16 @@ prompt rather than answered with a default. A full rebuild asks them again, beca
 map they describe is the one being replaced; a group rebuild does not, because it is
 not changing the shape of the whole.
 
+**Then one screen holding all of it, and the button.** Everything the map is about to be
+built from — the three answers, the shape, the lines the model is given, the seven picks
+— is on one page, each of them changed where it stands, with *build the map* underneath.
+It is worth a screen because the build is the one decision nobody can correct afterwards
+except by throwing the whole map away, and until it existed the answers were spread over
+a form and a sheet and were never visible together. It also survives the build failing:
+none of it is held by the screen, so a model error, a quota, or a request the CDN gives
+up on leaves the learner exactly where they were with one button to press again, rather
+than answering seven questions for a map they had already asked for.
+
 - *The ideal:* diagnose before you instruct, and spend the diagnosis on what they can
   already do rather than on how they rate themselves.
 - *Seen in the wild:* **Duolingo's placement test.** It does not ask how good your
@@ -1136,7 +1146,7 @@ the design, not an acceptable gap.
 | A9 | No streaks | Cumulative session count only; missed days are unmarked |
 | A10 | No dead time | Streaming with skeletons; speculative pre-generation; no spinner over finished content; a settings change never rewrites a card on the next open — the card that exists is shown, and writing it again is one deliberate press; asking for a card to be read aloud answers immediately and the recording is made behind the screen, which stays readable |
 | A11 | Not several instructions at once | One instruction per screen; multi-step tasks render as a checklist |
-| A12 | Nothing carried across screens | Values repeated at the point of use; jargon defined on hover in place; the map's edit screen states the shape and the instruction lines the map was built to, so what was chosen at build time is read rather than remembered; a question asked on a card is answered and kept on that card, and the panel under a card states both what it was written to and what the node now asks for |
+| A12 | Nothing carried across screens | Everything a map is about to be built from is on the screen that builds it, so nothing chosen earlier has to be remembered; values repeated at the point of use; jargon defined on hover in place; the map's edit screen states the shape and the instruction lines the map was built to, so what was chosen at build time is read rather than remembered; a question asked on a card is answered and kept on that card, and the panel under a card states both what it was written to and what the node now asks for |
 | A13 | No clutter | One visual per card; groups on the map collapse, so a wide subject is still one screen; chrome hidden during drills; no badges or notifications mid-session |
 | A14 | No setup before starting | Calibration is 60 interesting seconds; the seven choices are one screen each, all skippable, and every one is a pick rather than a form field; the profile is optional and never blocks a topic; sign-in comes after the first node |
 | A15 | No repeating known material | Two correct applications retires a node to spaced review; skip is always available |

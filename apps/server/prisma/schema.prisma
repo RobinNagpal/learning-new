@@ -18,13 +18,28 @@ datasource db {
 model User {
   id           String        @id
   email        String        @unique
-  // The top folder of every audio object this learner owns. Allocated from the
-  // address at registration (emailSlug + uniqueSlug in packages/schemas), never
-  // by the learner, and unique because two accounts at two providers can hold
-  // the same local part — and their recordings must not be the same object.
-  // The default is the deploy gap described on Topic.slug: for the seconds
+  // How this learner is addressed: the top folder of every audio object they
+  // own, and what every public read is under. Allocated from the address at
+  // registration (emailSlug + uniqueSlug in packages/schemas), never by the
+  // learner and never changed — changing it orphans every recording — and
+  // unique because two accounts at two providers can hold the same local part.
+  // The default is the deploy gap described on Topic.slug: for the minutes
   // between the migration and the new bundle, the old code registers users
-  // naming no slug. Drop it in the next schema change.
+  // naming no username. Drop it in the next schema change.
+  username     String        @unique @default(dbgenerated("md5((random())::text)"))
+  // What `username` was called until it also became an address. Kept for one
+  // deploy only: migrations run before the new bundle ships, so the code still
+  // running when this lands selects this column and dropping it in the same
+  // change would break every query touching a user. Nothing reads or writes it
+  // now — registration deliberately leaves it to its default, since it carries
+  // a unique index of its own.
+  //
+  // THE NEXT SCHEMA CHANGE DROPS IT, and repairs the deploy gap on the way:
+  //   UPDATE users SET username = slug WHERE username <> slug;
+  //   ALTER TABLE users DROP COLUMN slug;
+  // An account registered in the minutes between the migration and the new
+  // bundle has a real slug and a defaulted username, and that first line is
+  // what gives it the name it should have had.
   slug         String        @unique @default(dbgenerated("md5((random())::text)"))
   // scrypt output, "scrypt$N$r$p$salt$hash". Excluded globally via the Prisma
   // client's `omit` config so it can never reach an API response.
